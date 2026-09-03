@@ -55,6 +55,8 @@ h1{max-width:850px;margin:0 0 22px;color:var(--ink);font-size:clamp(2.15rem,4.6v
 .side-meta{margin:20px 0 0;color:var(--faint);font-size:10.5px;line-height:1.55}
 
 .mobile-nav-toggle{display:none;position:fixed;z-index:50;left:14px;top:12px;padding:9px 12px;border:1px solid var(--line2);border-radius:6px;background:rgba(255,255,255,.96);color:var(--ink);font:650 11px var(--sans);box-shadow:0 4px 18px rgba(0,0,0,.08)}
+.lang-switch{position:fixed;z-index:60;top:14px;right:18px;padding:7px 11px;border:1px solid var(--line2);border-radius:5px;background:rgba(255,255,255,.96);color:var(--ink);font:650 11px/1.35 var(--sans);text-decoration:none;box-shadow:0 3px 14px rgba(0,0,0,.06)}
+.lang-switch:hover{border-color:var(--blue);color:var(--blue)}
 .nav-scrim{display:none;position:fixed;z-index:38;inset:0;background:rgba(17,18,20,.28)}
 .hero-summary{max-width:800px;margin:0 0 28px;color:var(--muted);font-size:1.14rem;line-height:1.65}
 .hero-principle{margin:32px 0;padding:20px 22px;border-left:3px solid var(--blue);background:#f4f7fc;color:var(--body);font-size:.98rem;line-height:1.65}
@@ -209,8 +211,6 @@ tbody tr:last-child td{border-bottom:0}
   .hero-actions a{justify-content:space-between}
 }
 
-/* ── preserved hardware-runbook styles ────── */
-.field-photo{display:block;width:100%;max-height:760px;object-fit:contain;background:#f1f1ed}
 /* ── hardware runbooks ────────────────────── */
 .hardware-index{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:34px 0 52px}
 .hardware-index a{display:block;min-height:126px;padding:20px 22px;border:1px solid var(--line2);border-radius:7px;
@@ -328,6 +328,7 @@ figure{margin:40px 0}
 </style>
 </head>
 <body>
+<a class="lang-switch" href="zh.html" lang="zh-Hans" hreflang="zh-Hans">中文</a>
 <button class="mobile-nav-toggle" type="button" aria-controls="sidePanel" aria-expanded="false">Contents</button>
 <div class="nav-scrim" aria-hidden="true"></div>
 

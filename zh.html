@@ -1,0 +1,1125 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="把 VLA checkpoint 装到真机上让我们意外的六件事：为什么张量形状对了等于没对，为什么平滑做得越多看起来越不平滑，为什么更对称的起始位姿反而更糟，以及为什么拿自己采的纠正数据微调会让模型更差。">
+<title>把 VLA 装到真机上，让我们意外的六件事</title>
+<style>
+:root{
+  color-scheme: light;
+  --paper:#fdfdfc; --surface:#fff; --soft:#f6f6f3; --bar:#f6f6f3;
+  --ink:#111214; --body:#3f444a; --muted:#6c727a; --faint:#9aa0a7;
+  --line:#e9e8e4; --line2:#d6d5cf;
+  --blue:#1a56c4; --teal:#0d7059; --amber:#96610a; --red:#ab3b35; --violet:#5f3fbe; --grey:#b4b7b0;
+  --sans:"Inter","Inter var",ui-sans-serif,-apple-system,"Segoe UI",Roboto,"PingFang SC","HarmonyOS Sans SC","Source Han Sans SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+.lang-switch{position:fixed;z-index:60;top:14px;right:18px;padding:7px 11px;border:1px solid var(--line2);border-radius:5px;background:rgba(255,255,255,.96);color:var(--ink);font:650 11px/1.35 var(--sans);text-decoration:none;box-shadow:0 3px 14px rgba(0,0,0,.06)}
+.lang-switch:hover{border-color:var(--blue);color:var(--blue)}
+body{margin:0;background:var(--paper);color:var(--body);
+  font:16.2px/1.9 var(--sans);font-feature-settings:"kern","liga";-webkit-font-smoothing:antialiased}
+a{color:var(--blue);text-decoration-thickness:1px;text-underline-offset:2px}
+p{margin:0 0 20px}
+b,strong{color:var(--ink);font-weight:640}
+code{font:.85em/1.5 var(--mono);color:#1e3d68;background:#f0f2f6;padding:1px 5px;border-radius:3px;overflow-wrap:anywhere}
+
+main{width:min(940px,calc(100% - 44px));margin:0 auto;padding:64px 0 130px}
+.col{max-width:700px;margin-left:auto;margin-right:auto}
+.wide{max-width:940px;margin-left:auto;margin-right:auto}
+
+header{margin-bottom:56px}
+.kicker{margin-bottom:20px;color:var(--faint);font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+h1{margin:0 0 22px;color:var(--ink);font-size:clamp(2.05rem,4.4vw,3.05rem);font-weight:720;letter-spacing:-.012em;line-height:1.2}
+.dek{margin-bottom:22px;color:var(--muted);font-size:1.13rem;line-height:1.62}
+.byline{padding-top:18px;border-top:1px solid var(--line);color:var(--faint);font-size:12.5px;line-height:1.75}
+.byline b{color:var(--muted);font-weight:640}
+
+.toc{margin-top:40px;padding-top:24px;border-top:1px solid var(--line)}
+.toc ol{margin:0;padding:0;list-style:none;counter-reset:t}
+.toc li{counter-increment:t;position:relative;margin-bottom:9px;padding-left:30px;font-size:14.6px;line-height:1.5}
+.toc li::before{content:counter(t);position:absolute;left:0;top:1px;color:var(--faint);font:600 12px var(--mono)}
+.toc a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--line2)}
+.toc a:hover{color:var(--blue);border-color:var(--blue)}
+
+section{margin-top:92px;scroll-margin-top:14px}
+.num,.sec-num{margin-bottom:12px;color:var(--faint);font:600 12px var(--mono);letter-spacing:.1em}
+h2{margin:0 0 26px;color:var(--ink);font-size:clamp(1.5rem,2.9vw,1.9rem);font-weight:700;letter-spacing:-.006em;line-height:1.32}
+h3{margin:44px 0 14px;color:var(--ink);font-size:1.1rem;font-weight:700;letter-spacing:-.012em;line-height:1.35}
+.sec-lede{max-width:700px;color:var(--muted);font-size:1.04rem;line-height:1.65}
+ul,ol{margin:0 0 20px;padding-left:24px}
+li{margin-bottom:10px;padding-left:3px}
+li::marker{color:var(--faint)}
+blockquote{margin:26px 0;padding-left:22px;border-left:2px solid var(--line2);color:var(--muted);font-size:1.02rem}
+blockquote p:last-child{margin-bottom:0}
+
+.note{margin:30px 0;padding-left:20px;border-left:2px solid var(--line2)}
+.note .lbl,.note .label{display:block;margin-bottom:8px;color:var(--faint);font-size:10.5px;font-weight:700;letter-spacing:.13em;text-transform:uppercase}
+.note p{margin:0 0 12px;font-size:.965rem}
+.note p:last-child,.note ol:last-child,.note ul:last-child{margin-bottom:0}
+.note ol,.note ul{font-size:.965rem}
+.note.blue,.note.rule{border-left-color:var(--blue)}
+.note.blue .lbl,.note.rule .label{color:var(--blue)}
+.note.warn{border-left-color:var(--amber)}
+.note.warn .lbl,.note.warn .label{color:var(--amber)}
+.note h4{margin:16px 0 7px;color:var(--ink);font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+
+.code{margin:30px 0}
+.code .f{display:block;margin-bottom:8px;color:var(--faint);font:11.5px/1.5 var(--mono)}
+.code-bar{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 16px;margin-bottom:8px;color:var(--faint);font:11.5px/1.5 var(--mono)}
+.code-bar .f{margin:0;color:var(--ink)}
+.code-bar .n{color:var(--faint);font-family:var(--sans);font-size:11.5px}
+pre{margin:0;padding:20px 22px;overflow-x:auto;border-radius:5px;background:var(--soft);
+  font:12.7px/1.8 var(--mono);color:#333a41;white-space:pre;tab-size:2}
+pre .c{color:#a3a9b0;font-style:italic}
+pre .k{color:var(--blue)}
+pre .s{color:var(--teal)}
+pre .n{color:var(--amber)}
+pre .p{color:#9aa0a7}
+
+.eq{margin:34px 0}
+.eq>math{font-size:1.3rem;color:var(--ink);padding:6px 0 20px}
+math{font-family:"STIX Two Math","Latin Modern Math","Cambria Math",Cambria,Georgia,serif}
+.terms{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px 30px;
+  margin:0;padding-top:16px;border-top:1px solid var(--line)}
+.terms>div{display:grid;grid-template-columns:auto minmax(0,1fr);gap:0 11px;align-items:baseline}
+.terms dt{color:var(--ink);font:600 12.5px var(--mono);white-space:nowrap}
+.terms dd{margin:0;color:var(--muted);font-size:12.4px;line-height:1.5}
+.terms dd b{color:var(--ink);font-weight:640}
+
+figure{margin:44px 0;padding:0}
+figcaption{margin-bottom:18px;color:var(--muted);font-size:12.8px;line-height:1.6}
+figcaption b{color:var(--ink);font-weight:640}
+figcaption span{display:inline}
+.fig-body{padding:0}
+.fig-note{margin:14px 0 0;color:var(--faint);font-size:12px;line-height:1.55}
+svg{display:block;width:100%;height:auto;overflow:visible}
+svg text{font-family:var(--sans)}
+.legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(258px,1fr));gap:8px 28px;
+  margin-top:20px;padding-top:16px;border-top:1px solid var(--line);font-size:12.2px;line-height:1.5}
+.legend>span{display:block;padding-left:20px;text-indent:-20px;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;margin-right:10px;border:1px solid rgba(0,0,0,.2);border-radius:2px;transform:translateY(1px);text-indent:0}
+.legend b{color:var(--ink)}
+.legend code{font-size:.9em;padding:0 3px}
+
+.controls{display:flex;flex-wrap:wrap;gap:14px 28px;margin-bottom:26px;font-size:11px}
+.controls label{display:grid;gap:6px;color:var(--muted)}
+.controls .cap{display:flex;justify-content:space-between;gap:14px;font-weight:650;letter-spacing:.06em;text-transform:uppercase}
+.controls .cap b{color:var(--ink);font:650 11.5px var(--mono);letter-spacing:0}
+.controls input[type=range]{width:126px;accent-color:var(--blue)}
+.controls select{padding:3px 6px;border:1px solid var(--line2);border-radius:4px;background:#fff;color:var(--ink);font:11.5px var(--sans)}
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(136px,1fr));gap:16px 26px;
+  margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}
+.readout>div{color:var(--muted);font-size:11.2px;line-height:1.45}
+.readout b{display:block;margin-bottom:3px;color:var(--ink);font:650 1.22rem/1.1 var(--mono);letter-spacing:-.02em}
+
+.table{margin:30px 0;overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.8px;line-height:1.6}
+th,td{padding:12px 20px 12px 0;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{color:var(--faint);font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;border-bottom-color:var(--line2)}
+td{color:var(--muted)}
+td:first-child{color:var(--ink);font-weight:600}
+tbody tr:last-child td{border-bottom:0}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:20px 26px;margin:28px 0;padding-top:18px;border-top:1px solid var(--line)}
+.facts .v{display:block;color:var(--ink);font:700 1.32rem/1.15 var(--sans);letter-spacing:-.026em}
+.facts .k{display:block;margin-top:5px;color:var(--muted);font-size:11.6px;line-height:1.45}
+
+.end{margin-top:92px;padding-top:28px;border-top:1px solid var(--line2)}
+.end h2{font-size:1.32rem;margin-bottom:18px}
+.end ul{columns:2;column-gap:34px;list-style:none;padding:0;margin:16px 0 0}
+.end li{margin-bottom:7px;font-size:13px}
+.colophon{margin-top:32px;padding-top:20px;border-top:1px solid var(--line);color:var(--faint);font-size:12px;line-height:1.75}
+.colophon code{background:none;padding:0;color:var(--muted)}
+
+@media (max-width:700px){
+  main{width:calc(100% - 32px);padding-top:44px}
+  .end ul{columns:1}
+}
+
+/* ── preserved hardware-runbook styles ────── */
+/* ── hardware runbooks ────────────────────── */
+.hardware-index{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:34px 0 52px}
+.hardware-index a{display:block;min-height:126px;padding:20px 22px;border:1px solid var(--line2);border-radius:7px;
+  background:var(--surface);color:var(--muted);text-decoration:none;transition:border-color .15s,transform .15s}
+.hardware-index a:hover{border-color:var(--blue);transform:translateY(-2px)}
+.hardware-index .robot-name{display:block;margin-bottom:9px;color:var(--ink);font-size:1.05rem;font-weight:720;letter-spacing:-.015em}
+.hardware-index .robot-kind{display:block;margin-bottom:14px;color:var(--faint);font:700 10px var(--sans);letter-spacing:.13em;text-transform:uppercase}
+.hardware-index .robot-risk{font-size:12.5px;line-height:1.55}
+.robot-guide{margin-top:58px;padding:30px 30px 4px;border:1px solid var(--line2);border-top-width:5px;border-radius:8px;background:var(--surface)}
+.robot-guide.gr3{border-top-color:var(--violet)}
+.robot-guide.piper{border-top-color:var(--teal)}
+.robot-guide-head{display:grid;grid-template-columns:112px minmax(0,1fr);gap:22px;align-items:start;margin-bottom:30px}
+.robot-badge{display:grid;place-items:center;min-height:74px;border:1px solid var(--line2);border-radius:6px;
+  color:var(--ink);font:750 12px var(--mono);letter-spacing:.08em;background:var(--bar)}
+.robot-guide.gr3 .robot-badge{color:var(--violet);background:#f0ecfb;border-color:#d6cbed}
+.robot-guide.piper .robot-badge{color:var(--teal);background:#e7f3ef;border-color:#bfddd3}
+.robot-guide-head h3{margin:0 0 8px;color:var(--ink);font-size:1.55rem;font-weight:750;letter-spacing:-.025em;line-height:1.1}
+.robot-guide-head p{max-width:64ch;margin:0;color:var(--muted);font-size:.94rem;line-height:1.6}
+.robot-guide>.facts,.robot-guide>figure,.robot-guide>.table,.robot-guide>.note,.robot-guide>.code{margin-left:0;margin-right:0}
+.hardware-steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;margin:28px 0 34px;border:1px solid var(--line2);border-radius:7px;overflow:hidden}
+.hardware-step{min-height:126px;padding:16px 15px;background:var(--surface)}
+.hardware-step+.hardware-step{border-left:1px solid var(--line)}
+.hardware-step .num{display:block;margin-bottom:20px;color:var(--faint);font:700 10px var(--mono)}
+.hardware-step b{display:block;margin-bottom:5px;font-size:12.5px}
+.hardware-step span:last-child{display:block;color:var(--muted);font-size:11px;line-height:1.45}
+.piper-identity{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:22px;background:var(--bar)}
+.identity-card{padding:18px;border:1px solid var(--line2);border-radius:6px;background:var(--surface)}
+.identity-card .side{display:flex;justify-content:space-between;gap:14px;margin-bottom:14px;color:var(--ink);font-weight:720}
+.identity-card .side span{color:var(--teal);font:700 10px var(--mono);letter-spacing:.08em;text-transform:uppercase}
+.identity-card dl{display:grid;grid-template-columns:86px minmax(0,1fr);gap:7px 12px;margin:0}
+.identity-card dt{color:var(--faint);font-size:10.5px;text-transform:uppercase}
+.identity-card dd{margin:0;color:var(--muted);font:11.5px/1.5 var(--mono);overflow-wrap:anywhere}
+.camera-sequence{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;border:1px solid var(--line2);border-radius:7px;overflow:hidden}
+.camera-role{min-height:118px;padding:16px 18px;background:var(--surface)}
+.camera-role+.camera-role{border-left:1px solid var(--line)}
+.camera-role b{display:block;margin-bottom:9px;font-size:12px}
+.camera-role code{display:block;margin:3px 0;background:none;padding:0;font-size:11px}
+.camera-role span{display:block;margin-top:8px;color:var(--faint);font-size:10.5px;line-height:1.45}
+.maintenance-boundary{display:grid;grid-template-columns:1fr auto 1fr;gap:18px;align-items:center;margin:30px 0;padding:22px;
+  border:1px solid #e2c4c1;border-radius:7px;background:#fbf2f1}
+.maintenance-boundary>div{color:var(--muted);font-size:12.5px;line-height:1.55}
+.maintenance-boundary b{display:block;margin-bottom:4px}
+.maintenance-boundary .not-both{display:grid;place-items:center;width:54px;height:54px;border:2px solid var(--red);border-radius:50%;
+  color:var(--red);font:800 11px var(--mono)}
+@media (max-width:900px){
+  .hardware-steps{grid-template-columns:1fr}
+  .hardware-step+.hardware-step{border-left:0;border-top:1px solid var(--line)}
+}
+@media (max-width:680px){
+  .hardware-index,.piper-identity,.camera-sequence{grid-template-columns:1fr}
+  .robot-guide{padding:22px 16px 4px}
+  .robot-guide-head{grid-template-columns:1fr;gap:14px}
+  .robot-badge{min-height:48px}
+  .camera-role+.camera-role{border-left:0;border-top:1px solid var(--line)}
+  .maintenance-boundary{grid-template-columns:1fr}
+  .maintenance-boundary .not-both{width:42px;height:42px}
+}
+.robot-guide figcaption span{display:block;margin-top:4px}
+
+</style>
+</head>
+<body>
+<a class="lang-switch" href="index.html" lang="en" hreflang="en">English</a>
+<main>
+
+<header class="col">
+  <div class="kicker">XPolicyLab · 现场笔记</div>
+  <h1>把 VLA 装到真机上，让我们意外的六件事</h1>
+  <p class="dek">过去几个月我们一直在把 Pi0.5 和 FastWAM 的 checkpoint 装到真硬件上——一台 GR3 人形、一套双臂 PiPER、一台 Astribot S1。几乎所有我们一开始的假设，最后都以某种具体又烦人的方式被证明是错的。下面这些是值得写下来的。</p>
+  <p class="dek">如果这些事情有一条共同的线索，那就是：<b>数据集不只是训练输入，它是你手上关于运行时最可靠的一份规格书。</b>README 可能是错的，训练那个 checkpoint 的人可能已经离职了。但数据集不会在这些事情上撒谎：模型看到了什么、顺序如何、单位是什么、频率多少、从什么起始位姿开始。</p>
+  <div class="byline">
+    <span><b>机器人</b> GR3 · 双臂 PiPER X · Astribot S1 &nbsp;·&nbsp; <b>策略</b> Pi0.5 · FastWAM</span><br>
+    <span>这里的每个数字都能追到一条日志、一个录好的 episode 或一份 bundle 合同。本文不构成任何让机器人动起来的授权。</span>
+  </div>
+
+  <nav class="toc">
+    <ol>
+      <li><a href="#shape">形状是对的，机器人是废的</a></li>
+      <li><a href="#baseline">我们总想跳过那个无聊的基线</a></li>
+      <li><a href="#sluggish">"今天机器人怎么这么钝？"</a></li>
+      <li><a href="#smooth">平滑做得越多，看起来越不平滑</a></li>
+      <li><a href="#pose">把起始位姿弄得更对称，反而更糟</a></li>
+      <li><a href="#dagger">拿自己采的纠正数据微调，模型更差了</a></li>
+      <li><a href="#plumbing">最不性感的解法：一个 checkpoint 一个文件</a></li>
+      <li><a href="#boring">那些无聊的答案，和我们不再混着用的词</a></li>
+      <li><a href="#hardware">附录：把机器人开起来</a></li>
+    </ol>
+  </nav>
+</header>
+
+<!-- 1 -->
+<section id="shape">
+  <div class="col">
+    <div class="num">01</div>
+    <h2>形状是对的，机器人是废的</h2>
+
+    <p>这是坑我们次数最多的一种失败。checkpoint 加载成功，restore 干净，你喂给它一份合成观测，它回你一个漂亮的 <code>[32,14]</code> 浮点数组，全是有限值。每一条断言都过了。然后你把它放到机器人上，它做出的动作介于"什么都没做"和"有点吓人"之间。</p>
+
+    <p>形状永远是对的。这某种意义上就是问题所在——形状本来就不是会出错的那一部分。两个张量可以形状完全一样，却描述两台完全不同的机器人。</p>
+
+    <p>"三路 RGB 相机加 14 维状态输出 14 维动作"不是合同，那是形状。真正决定这东西能不能跑的问题，全都在形状下面一层：</p>
+
+    <ul>
+      <li>哪一路是<em>左</em>？机器人的左，还是操作员监控画面里的左？</li>
+      <li>RGB 还是 BGR，谁负责转——驱动、graph，还是 adapter？</li>
+      <li>夹爪的单位是米、毫米，还是行程百分比？</li>
+      <li>chunk 的第 0 行是"此刻"，还是"下一个控制 tick"？</li>
+      <li>它见过的到底是哪几条 prompt？不是"关笔记本"，而是 <em>"Close the laptop."</em>——大写 C，带句号。</li>
+    </ul>
+
+    <p>这些在形状检查里一个都看不见。而它们每一个都能毁掉你一个下午。</p>
+
+    <h3>所以现在我们让 checkpoint 自己回答这些问题</h3>
+
+    <p>我们部署的每个 bundle 都带一份冻结的、机器可读的 <code>contract.json</code>。不是文档——是运行时会去读、并且会强制执行的文件。下面是真实的一份，删了些行：</p>
+  </div>
+
+  <div class="code wide">
+    <span class="f">model-store/models/&lt;policy-family&gt;/&lt;checkpoint&gt;/contract.json</span>
+<pre data-lang="json">{
+  "observation": {
+    "head_rgb":        "uint8[H,W,3] RGB",
+    "left_wrist_rgb":  "uint8[H,W,3] RGB",
+    "right_wrist_rgb": "uint8[H,W,3] RGB",
+    "state":           "float32[14] absolute joints/grippers",
+    "prompt":          "one canonical atomic-task instruction"
+  },
+  "action": {
+    "representation": "absolute joint/gripper targets after output transform",
+    "units":          "joint radians; gripper width in dataset units",
+    "shape":          [32, 14],
+    "control_hz":     30,
+    "execute_chunk":  16
+  },
+  "canonical_prompts": [ "Close the laptop.", "Pick up one pen and place it in the pen holder.", ... ],
+
+  "evidence_scope": {
+    "establishes":        ["bundle restore", "finite synthetic inference", "I/O contract"],
+    "does_not_establish": ["simulator success", "real robot success", "task success rate"]
+  }
+}</pre>
+  </div>
+
+  <div class="col">
+    <p>最后那一段是整个仓库里我最喜欢的东西。bundle 在自己内部声明了它<em>不能</em>证明什么。它挡下来的"过于乐观的周五傍晚"，比任何测试覆盖率都多。</p>
+
+    <h3>那个 14 维向量的排布跟你想的不一样</h3>
+
+    <p>不许看，快速回答：我们双臂 PiPER 的状态是 14 个数，两条 6 自由度手臂各带一个夹爪。它是怎么排的？</p>
+
+    <p>如果你说"12 个手臂关节，然后 2 个夹爪"——一样，大家都这么说。它是错的：</p>
+  </div>
+
+  <div class="code wide">
+    <span class="f">real_world/robots/piper_x_dual/mapping.py</span>
+<pre data-lang="py">ACTION_NAMES = (
+    left_joint1 … left_joint6,   left_gripper,     # 索引 0-6
+    right_joint1 … right_joint6, right_gripper,    # 索引 7-13
+)
+units = ("rad",)*6 + ("m",) + ("rad",)*6 + ("m",)</pre>
+  </div>
+
+  <div class="col">
+    <p>夹爪是<em>插在中间</em>的，在索引 6 和索引 13。按直觉那种排法去写，右臂每个关节都会错位一格，一个米量级的数落进一个期待弧度的槽里，机器人会做出一个你会记很久的动作。而维度检查全程都是通过的，因为形状仍然是 <code>[14]</code>。</p>
+
+    <p>所以我们的 schema 带的是 <code>fields</code>、<code>units</code> <em>和</em> <code>semantics</code> 三个并列元组，而不是一个光秃秃的维度；也所以任何东西动起来之前，两端都要先比 <code>schema_id</code>。15 Hz 的 chunk 也不可能被悄悄按 30 Hz 执行——频率是单独检查的，因为这个我们也错过。</p>
+
+    <h3>颜色是最阴的那个</h3>
+
+    <p>我们的采集 profile 发布 <code>bgr8</code>，bundle 合同写的是 <code>RGB</code>。必须有人在一个你能指出来的地方，恰好转一次。转两次会互相抵消。一次都不转，模型看到的是一张完全合理、只是颜色不对的世界图像，然后它的行为会变怪——而任何断言都抓不到。</p>
+
+    <div class="note warn">
+      <span class="lbl">这个我们在软件里根本抓不到</span>
+      <p>我们在 PiPER 上第一次标的左右相机就是错的。两路都健康，两个序列号都钉在 instance profile 里，两个角色都稳定。全绿。软件层面没有任何东西能把它和"正确"区分开。</p>
+      <p>最后是有人站到其中一台相机前面挥手，才发现的。</p>
+      <p>现在验收流程里每台相机都要做一次遮挡核验，因为相机身份是一个<b>物理断言</b>，只有物理测试才能证伪它。在 UI 里把标签换到画面"看起来对"为止，你会得到一个稳定说谎的系统——那严格来说比一个明显在说谎的系统更糟。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 2 -->
+<section id="baseline">
+  <div class="col">
+    <div class="num">02</div>
+    <h2>我们总想跳过那个无聊的基线</h2>
+
+    <p>每一次我们赶时间，都会一口气把整套东西全打开——异步预取、RTC 混合、低通滤波，全部——然后开始研究机器人为什么行为怪异。这从来没有一次让我们更快。</p>
+
+    <p>所以现在的规矩，而且我们相当虔诚地遵守：<b>先让裸策略跑起来，再加别的。</b>原始动作，正确合同，送到机器人。它会有点抖，没关系。一个会抖但动作合理的策略能告诉你巨量信息；一个被层层处理却从来不动的策略，几乎什么都告诉不了你。</p>
+
+    <p>"裸"是一份具体配置，不是一种感觉：</p>
+
+    <ul>
+      <li><code>ACTION_RTC_MODE=disabled</code>——不学预取点，不做混合。</li>
+      <li><code>--no-model-filter</code>——模型关节上不加低通。</li>
+      <li>执行前缀用 descriptor 默认值，32 步 horizon 里的 16 步。是评审过的值，不是一次实验。</li>
+      <li>先 <code>--no-write</code>。影子模式，任何东西都不到 SDK。</li>
+    </ul>
+
+    <p>而永远不会被关掉的是：schema 校验、频率一致、generation 栅栏、新鲜度检查，以及机器人自有的最终门加上有且只有一个进程能调 SDK writer。这些不是"处理"，这是地板。</p>
+
+    <p>有一个细节我们花了点时间才真正吃透：RTC 关掉的时候，<b>已执行动作对齐仍然在跑。</b>它是强制的，不是 RTC 的特性。上一个 episode 的迟到 chunk 照样会被丢弃，返回结果照样会按在途期间消费掉的动作数做对齐。为什么，马上说。</p>
+
+    <h3>我们实际上看什么</h3>
+
+    <p>不是"动作看着顺不顺"。我们算 chunk 里每一步的最大绝对关节变化，然后把它的<em>分布</em>和原始训练 episode 的逐关节速度分位数比较。</p>
+  </div>
+
+  <div class="eq wide">
+    <math display="block">
+      <mrow>
+        <mi>δ</mi><mo>=</mo>
+        <munder><mo movablelimits="false">max</mo><mi>j</mi></munder>
+        <mrow><mo stretchy="false">|</mo>
+          <msub><mi>a</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn><mo>,</mo><mi>j</mi></mrow></msub>
+          <mo>−</mo>
+          <msub><mi>a</mi><mrow><mi>t</mi><mo>,</mo><mi>j</mi></mrow></msub>
+        <mo stretchy="false">|</mo></mrow>
+      </mrow>
+    </math>
+    <dl class="terms">
+      <div><dt>δ</dt><dd>策略在一个控制步里想移动多远</dd></div>
+      <div><dt>a<sub>t,j</sub></dt><dd>chunk 第 <b>t</b> 行、第 <b>j</b> 个关节的指令目标</dd></div>
+      <div><dt>max<sub>j</sub></dt><dd>对全部 14 个字段取最大，单个坏关节藏不住</dd></div>
+      <div><dt>t</dt><dd>chunk 内部的行索引，不是墙钟时间</dd></div>
+    </dl>
+  </div>
+
+  <div class="col">
+    <p>这一个数就能把三种在机器人上感觉完全一样的失败区分开。<b>太小</b>：模型太保守，或者它的纠正数据采得很慢（见 §6）。<b>太大</b>：安全层马上要把大部分限掉，机器人会显得又闷又跟不上。<b>不连续</b>：接缝、单位错误，或者策略确实进了不稳定区域。</p>
+
+    <p>两个真实数字用来校准。GR3 上一个"感觉发钝"的 checkpoint，中位最大关节步长是 <b>0.041 rad</b>，而大家都喜欢的那个是 <b>0.064 rad</b>——小了 37%，推理延迟完全一样。另一次运行里，原始步长冲到 <b>1.13–1.19 rad</b>，撞上 <b>0.10 rad/step</b> 的限幅，<b>单个 chunk 里最多裁掉 97 个值</b>。</p>
+
+    <p>这两件事报到我们这儿都是"机器人变慢了"。成因相反，修法也相反。</p>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="sluggish">
+  <div class="col">
+    <div class="num">03</div>
+    <h2>"今天机器人怎么这么钝？"</h2>
+
+    <p>这是我们手上最好的一个调试故事，因为所有凭直觉给出的答案都是错的，包括我自己的。</p>
+
+    <p>8 月 12 日，GR3，pick-doll 任务。checkpoint 跟前一天是同一系列，但机器人明显更差了——犹豫、停顿，那种一卡一卡的动法，会让房间里所有人立刻假设有什么东西过热了。</p>
+
+    <p>那些显而易见的假设，以及日志实际上说了什么：</p>
+
+    <ul>
+      <li><b>推理变慢了？</b>73 ms。和那次感觉超好的运行一模一样。</li>
+      <li><b>工作站在抖？</b>内存还剩 102 GiB。</li>
+      <li><b>GPU 在烧？</b>36 °C。</li>
+      <li><b>电机过热？</b>机器人计算机约 20 °C，控制器日志里没有任何过温、过流或电机故障条目。</li>
+      <li><b>是不是哪个缓存满了？</b>我们清掉了 7.6 GB 的包缓存。毫无变化，跟预期完全一致，但我们还是觉得有义务试一下。</li>
+    </ul>
+
+    <p>所以机器是好的。问题是我们。</p>
+
+    <h3>实际发生的事</h3>
+
+    <p>三件事叠在一起，按责任从大到小。</p>
+
+    <p><b>一：启动命令覆盖了 <code>RTC_TRIGGER_STEPS=24</code>，而通过资格验证的值是 22。</b>听起来像没差别。不是。在 30 行的对齐队列下，trigger 24 意味着只执行 <b>6–8 行</b>就重规划——大约 0.2–0.27 秒——而其中 4 行还在做混合。所以<b>每个更新间隔大约三分之二的时间都待在过渡里</b>。机器人一直在改主意，然后又把自己平均掉。</p>
+
+    <p><b>二：rollout 中途，checkpoint 提出了一个 0.623 rad 的右手食指接缝</b>，而准入上限是 0.56 rad。这个 chunk 被拒绝了，拒得没错。但队列随后<b>连续四个 chunk</b>失去了尾部——真正的饥饿。这就是操作员感受到的"停—动—停"。</p>
+
+    <p><b>三：被拒之后，原始模型步长冲到 1.13–1.19 rad。</b>安全层把它们限到 0.10 rad/step，单个 chunk 最多限了 <b>97 个值</b>。大量限幅在人眼看来，就是标准的"发闷、发钝"。</p>
+
+    <p>这里面没有一件是硬件问题，而且如果没有每个被接受的 chunk 都会发布的对齐证据——实测延迟、对齐偏移、队列深度、过渡前后的接缝大小——这些一件都查不出来。</p>
+
+    <h3>为什么对齐这件事重要</h3>
+
+    <p>算一点小学算术，整件事就明显了。30 Hz 下一个控制步是 33.3 ms。32 行 horizon 是 1.07 秒的计划。GR3 上实测的 Pi0.5 推理是 70–75 ms——就算 <b>2–3 个控制步</b>。</p>
+
+    <p>所以如果推理阻塞控制环，机器人会在两个 chunk 之间停 2–3 个 tick，你能听出来。如果推理是异步的、但回复从第 0 行开始安装，你就会重放 2–3 个"时刻已经过去"的动作，机器人会先往回窜一下再往前走。异步推理解决第一个问题。对齐解决第二个，所以它不是可选项。</p>
+  </div>
+
+  <div class="eq wide">
+    <math display="block">
+      <mrow>
+        <mi>c</mi><mo>=</mo>
+        <munder><munder accentunder="true">
+          <mrow><mo>(</mo><msub><mi>e</mi><mtext>now</mtext></msub><mo>−</mo><msub><mi>e</mi><mtext>submit</mtext></msub><mo>)</mo></mrow>
+          <mo>⏟</mo></munder><mtext>队列已消费</mtext></munder>
+        <mo>+</mo>
+        <munder><munder accentunder="true">
+          <mrow><mo>⌈</mo><mfrac><mrow><mi>Δ</mi><msub><mi>t</mi><mtext>obs</mtext></msub><mo>·</mo><mi>f</mi></mrow><msup><mn>10</mn><mn>9</mn></msup></mfrac><mo>⌉</mo></mrow>
+          <mo>⏟</mo></munder><mtext>观测已过期</mtext></munder>
+      </mrow>
+    </math>
+    <dl class="terms">
+      <div><dt>c</dt><dd>回复开头要扔掉多少行</dd></div>
+      <div><dt>e<sub>now</sub></dt><dd>此刻的执行步计数器</dd></div>
+      <div><dt>e<sub>submit</sub></dt><dd>发出请求时的同一个计数器</dd></div>
+      <div><dt>Δt<sub>obs</sub></dt><dd>从采图到提交请求之间的纳秒数</dd></div>
+      <div><dt>f</dt><dd>动作频率（Hz）——双臂 PiPER 上是 30</dd></div>
+      <div><dt>T</dt><dd>模型实际返回的行数</dd></div>
+    </dl>
+  </div>
+
+  <div class="col">
+    <p><b>c &lt; T</b> 才接受，然后执行第 c…T−1 行。否则整个回复都过期了：立刻丢弃并重新请求，而不是等下一次自然触发。</p>
+
+    <p>而<em>什么时候</em>去要下一个 chunk，来自实测延迟，不是来自某个人看着顺眼的数：</p>
+  </div>
+
+  <div class="eq wide">
+    <math display="block">
+      <mrow>
+        <msub><mi>n</mi><mtext>trigger</mtext></msub><mo>=</mo>
+        <mo movablelimits="false">min</mo><mo>(</mo><mi>H</mi><mo>−</mo><mn>1</mn><mo>,</mo>
+        <mspace width="0.3em"/>
+        <msub><mi>q</mi><mrow><mn>0.95</mn></mrow></msub><mo>+</mo><mi>m</mi>
+        <mo>+</mo>
+        <munder><munder accentunder="true">
+          <mrow><mo>(</mo><mi>p</mi><mo>+</mo><mi>τ</mi><mo>)</mo></mrow><mo>⏟</mo></munder>
+          <mtext>仅 blend</mtext></munder>
+        <mo>)</mo>
+      </mrow>
+    </math>
+    <dl class="terms">
+      <div><dt>n<sub>trigger</sub></dt><dd>队列剩到这个深度就发下一次请求</dd></div>
+      <div><dt>H</dt><dd>模型 horizon 的行数</dd></div>
+      <div><dt>q<sub>0.95</sub></dt><dd>最近 32 次回复的<b>实测</b>往返延迟 95 分位</dd></div>
+      <div><dt>m</dt><dd>设计余量——默认 1 步</dd></div>
+      <div><dt>p</dt><dd><b>preserve</b> 步数——我们选的，不是测出来的</dd></div>
+      <div><dt>τ</dt><dd><b>transition</b> 步数——只在 blend 模式下计入</dd></div>
+    </dl>
+  </div>
+
+  <div class="col">
+    <p>值得刻进脑子里的区别：<b><i>q</i> 是我们测出来的，<i>p</i> 和 <i>τ</i> 是我们定的。</b><code>preserve = 2</code> 不代表"GPU 花了两步"，它代表运行时决定在替换到达之后，再多信任两行对齐过的旧目标。把这两者混起来，你就会开始凭手感调延迟预算——8 月 12 日大致就是这么回事。</p>
+
+    <p>下面是完整的一个周期。拖滑块——有意思的地方是看哪些行换了主人。</p>
+  </div>
+
+  <figure class="wide" id="rtcfig">
+    <figcaption><b>一个 RTC 周期，按"这一行归谁"上色。</b>每个格子是一个控制步。上面一条是正在执行的计划，下面一条是替换计划，已经画成对齐之后的位置。</figcaption>
+    <div class="controls">
+      <label><span class="cap">模式</span><select id="rtcMode"><option value="align">align</option><option value="blend" selected>blend</option></select></label>
+      <label><span class="cap">Horizon H<b id="vH">32</b></span><input id="rH" type="range" min="12" max="48" step="4" value="32"></label>
+      <label><span class="cap">控制频率 Hz<b id="vF">30</b></span><input id="rF" type="range" min="10" max="60" step="5" value="30"></label>
+      <label><span class="cap">推理延迟 ms<b id="vL">73</b></span><input id="rL" type="range" min="20" max="240" step="1" value="73"></label>
+      <label><span class="cap">Preserve<b id="vP">2</b></span><input id="rP" type="range" min="0" max="8" value="2"></label>
+      <label><span class="cap">Transition<b id="vT">4</b></span><input id="rT" type="range" min="0" max="8" value="4"></label>
+    </div>
+    <svg id="rtcSvg" viewBox="0 0 900 250" role="img" aria-label="RTC 时序图"></svg>
+    <div class="legend" id="rtcLegend"></div>
+    <div class="readout" id="rtcOut"></div>
+  </figure>
+
+  <div class="col">
+    <div class="note blue">
+      <span class="lbl">我们的 RTC 不是什么</span>
+      <p>客户端 RTC 对<em>已经完成</em>的 action chunk 做对齐，以及可选的混合。就这些。previous-action 条件、冻结扩散步、梯度 guidance——那些是模型后端的能力，打开预取一个都不附送。</p>
+      <p>它们也可以被训练进去；我们 store 里就有一个 bundle 直接叫 <code>…-trainrtc-d0to6-v1</code>。那是那份权重的性质，和 <code>real_world/rtc.py</code> 做的事仍然是第三件独立的事。我们见过这三样在同一场对话里都被叫做"RTC"。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 4 -->
+<section id="smooth">
+  <div class="col">
+    <div class="num">04</div>
+    <h2>平滑做得越多，看起来越不平滑</h2>
+
+    <p>上面那个故事里，真正让我意外的是这部分。</p>
+
+    <p>我们拿它跟 DAgger-GR3——上一代的 stack——做了对比，而所有人都同意后者<em>感觉</em>更顺。它做的平滑更少，少很多。它会完整执行一整个连贯的 chunk，大约 1–1.7 秒的同一份计划，然后才去要下一个。而且它允许每个在线关节步 0.15 rad，我们是 0.10。</p>
+
+    <p>所以更新的、滤波更多、限制更紧的这套，看起来更差。</p>
+
+    <p>说出口之后我觉得这不算什么悖论，但我们花了挺丢人的一段时间才把它说出口：<b>一套更频繁替换轨迹、然后又把自己追赶的尝试裁掉的系统，会比一套干脆认准一份计划的系统看起来更不平滑。</b>每一次重规划都是一次跟自己意见不合的机会。每一次裁剪都是机器人离它正在追的目标又远了一点。</p>
+
+    <p>我们当时建议的下一步不是"放松安全上限"，而是 <code>RTC_TRIGGER_STEPS=16</code>——让相邻两次接受之间执行约 14 行连贯动作而不是 6 行——所有限制原封不动。</p>
+
+    <h3>我们真正在跑的处理器有哪些</h3>
+
+    <p>这里我想诚实一点，因为很多讲 VLA 部署的文章会把所有轨迹技巧都列出来，好像它们全都在用。在我们一个通过资格验证的部署里，真正开着的只有三样：</p>
+
+    <ul>
+      <li><b>模型关节上的一阶低通。</b>双臂 PiPER 默认开，α = 0.6。</li>
+      <li><b>RTC 对齐</b>，以及可选的有界混合。GR3 和 Astribot 用 align；blend 需要显式打开。</li>
+      <li><b>五次最小 jerk 分段轨迹</b>，用于 Prepare、Home 和数据集位姿过渡。</li>
+    </ul>
+
+    <p>PCHIP 重采样和 chunk QP 在 <code>real_world/output.py</code> 里都有实现。两个都默认关闭，GR3 提交的默认值就是 <code>GR3_CHUNK_SMOOTHING=off</code>，我们从来没有把它们中的任何一个验证到硬件上。我提这两个主要是为了：你读那个文件的时候，别以为它们在承重。</p>
+
+    <h3>低通，以及所有人都会搞错的那部分</h3>
+  </div>
+
+  <div class="eq wide">
+    <math display="block">
+      <mrow>
+        <msub><mi>y</mi><mi>t</mi></msub><mo>=</mo>
+        <msub><mi>y</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub>
+        <mo>+</mo><mi>α</mi>
+        <mrow><mo>(</mo>
+          <msub><mi>x</mi><mi>t</mi></msub><mo>−</mo>
+          <msub><mi>y</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub>
+        <mo>)</mo></mrow>
+        <mo>,</mo><mspace width="1.4em"/>
+        <mn>0</mn><mo>&lt;</mo><mi>α</mi><mo>≤</mo><mn>1</mn>
+      </mrow>
+    </math>
+    <dl class="terms">
+      <div><dt>y<sub>t</sub></dt><dd>本 tick 真正下发的滤波后目标</dd></div>
+      <div><dt>y<sub>t−1</sub></dt><dd>滤波器自己上一次的输出——这就是状态</dd></div>
+      <div><dt>x<sub>t</sub></dt><dd>本 tick 传进来的协调后目标</dd></div>
+      <div><dt>α</dt><dd>双臂 PiPER 上是 <b>0.6</b>。越小越平滑，也越滞后</dd></div>
+    </dl>
+  </div>
+
+  <div class="col">
+    <p>这个滤波器是<em>有状态</em>的，而这个状态就是全部故事。如果目标停在 1.0、输出读数是 0.5，那不是"目标被削小了"——后续更新会继续收敛到 1.0。理论上没问题。但在有限长的 action chunk 上，重规划通常在收敛之前就到了，所以真实行为更接近"永远只走到 60%"。这不是任何人想要的。</p>
+
+    <p>四个接线细节，每一个都是我们弄坏之后学到的：</p>
+
+    <ul>
+      <li>它在 RTC 协调<b>之后</b>跑，只作用于模型关节。</li>
+      <li>在 Start、接管、HOLD、反馈失败或 generation 变化之后的第一步，它用<b>新鲜的实测关节</b>重新初始化。</li>
+      <li>普通的 chunk 替换<b>不会</b>重置它。在那里重置，等于把这个滤波器本来要抹平的接缝又放回去。</li>
+      <li>专家动作和<b>两个夹爪宽度完全绕过它</b>。夹爪上的相位滞后会错过抓取时机，没有任何 α 能修好这件事。</li>
+    </ul>
+
+    <p>未滤波的目标先过一次检查，滤波后的目标在 owner 写 SDK 之前再过一次最终安全门。滤波不是绕过那道门的方式。</p>
+  </div>
+</section>
+
+<!-- 5 -->
+<section id="pose">
+  <div class="col">
+    <div class="num">05</div>
+    <h2>把起始位姿弄得更对称，反而更糟</h2>
+
+    <p>同一周，另一个谜。我们注意到 GR3 在 episode 开始时两条手臂不齐——正运动学算出来，左手比右手<b>前伸约 24 mm</b>，左手食指尖<b>高约 8 mm</b>。有点丑。显然值得修。</p>
+
+    <p>于是初始化 profile 从 <code>…start-v5-claude-elbows</code> 换成了 <code>…start-v6-bilateral-fk</code>，把两条手臂对称化，若干关节最多移动 <b>0.084 rad（4.8°）</b>。</p>
+
+    <p>几何变好了。行为变差了。</p>
+
+    <p>原因，在我们停止盯着机器人看、回去看数据之后：<b>v6 是一个算出来的位姿。</b>它是一个双臂 FK 解。它不是训练 episode 里任何一帧。所以 checkpoint 拿到的第一帧观测，是一个它从没见过的轮廓——任务还没开始，它就已经在解一个分布外问题了。它把这个表现成了犹豫，而我们花了一阵子去怪延迟。</p>
+
+    <p>可以推广的那一条，是我最希望别人带走的，因为它同时也否掉了一个听起来很聪明的方案：<b>逐关节取中位数有完全相同的缺陷。</b>每个关节的值单看都很典型。组合起来却可能是一个在零个 episode 里出现过的身体构型。一个用健康零件拼出来的缝合怪。</p>
+
+    <h3>改成从数据里取位姿</h3>
+
+    <p>我们现在在 PiPER 上的做法是挑真实录下来的帧——每条 prompt 12 个 follower-state medoid，取自真实的训练候选 episode。筛选规则很挑剔，而每一条都是因为放松过之后出过坏位姿：</p>
+
+    <ul>
+      <li>锚点取在检测到的持续关节运动起始<b>之前 8 帧（30 Hz 下约 267 ms）</b>——示范者即将发力的那一刻。</li>
+      <li>严格限制在 episode 的<b>前 22%</b>。绝不取中段，绝不取尾部。</li>
+      <li>后面至少还有 <b>120 帧</b>且有显著的后续运动，保证这是一个真正的"开始"而不是一次停顿。</li>
+      <li>远离任何终止状态。终止帧和完成后的帧被 schema 直接禁止。</li>
+      <li>库里没有覆盖的 prompt 直接 <b>fail closed</b>，而不是退化成某个通用 home 位姿。</li>
+    </ul>
+
+    <p>运行时，唯一的硬件 owner 只接受来自 SHA-256 绑定库的 pose <em>id</em>，然后自己独立重新推导关节限位和最大位移，才会执行任何东西。UI 从不发裸的 12 维目标。如果当前位置无法直达候选，owner 会经由声明的 clear/home 位姿拆成两段有界轨迹，每段下发前检查插值法兰高度——如果这条有界路径仍然不安全，它就 fail closed，而不是去开某个门。</p>
+
+    <div class="note">
+      <span class="lbl">诚实地说这件事买到了什么</span>
+      <p>我们现有的示范几乎都从同一个地方开始。所以这些 medoid 是真实的<em>早期 episode 变体</em>——它们不是一个多样化的起始分布，我也不想过度包装它。真正的起点多样性意味着去采 varied-start 示范。再聪明的筛选规则，也造不出从未被记录过的覆盖。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 6 -->
+<section id="dagger">
+  <div class="col">
+    <div class="num">06</div>
+    <h2>拿自己采的纠正数据微调，模型更差了</h2>
+
+    <p>这一个的起点是机器人领域最让人泄气的一句话：<em>"拿这份 DAgger 数据微调，效果反而更差。"</em></p>
+
+    <p>我们去找那个 bug。没有那个 bug。有六个，而且它们会叠加。</p>
+
+    <p>这些都在更早的 GR3 recorder 里，现在已经修掉了。我还是把它们列出来，因为这些失败的<em>形状</em>会在每一次新采集里重现，而且六个里有四个，你不主动去找就根本看不见。</p>
+
+    <ol>
+      <li><b>后续的纠正被悄悄丢掉。</b>recorder 在每次 save 或 discard 之后清空自己的 <code>episode_index</code>，而没有 index 就拒绝开始录——但控制器只在模型 episode 开始时发一次 index。所以一个 episode 里第一次接管录得好好的，第二次没有。我们的数据集被系统性地偏向"第一次纠正"，而那通常是最没意思的一次。</li>
+      <li><b><code>label.valid</code> 被污染。</b>重复的接管状态消息会发出一个 <code>label_valid=false</code> 的默认决策。原始采集里：<b>88,825 个 false</b> 对 <b>77,354 个 true</b>，约 <b>20%</b> 的对齐专家动作，最近的 validity 样本是 false。我们的严格转换器没有天真地消费那条流，所以 bundle 幸免了——但任何按最近时间戳 join 的东西都会把这个错误整个继承下来。</li>
+      <li><b>"成功"只表示操作员按了 save。</b>不表示玩偶最后落在了任何特定的地方。</li>
+      <li><b>我们只录了接管片段。</b>没有紧邻其前的模型失败，也没有其后完成的恢复。孤立的纠正，任务上下文被切掉了。</li>
+      <li><b>数据配比严重过采样了纠正。</b>新 DAgger 数据占每个 batch <b>64 中的 28——43.75%</b>——而到 step 4000 时每个片段大约被看了 <b>8.3 次</b>。短促而显眼的纠正动作，会盖掉父模型原本已经具备的长程成功行为。</li>
+      <li><b>六段录制里，安全限幅过的动作配着未裁剪的标签。</b>在严格重建里被隔离了。</li>
+    </ol>
+
+    <p>给个量级：严格数据集最后是 <b>22,996 帧 / 13,448 条有效 H32 query</b>。后来的 hybrid bundle 报告 <b>211 个 DAgger 片段、22,742 帧、16,201 条有效 query</b>，配比大约 40% DAgger / 60% replay。</p>
+
+    <h3>能修掉大部分问题的那件事：按控制 tick join</h3>
+
+    <p>相机跑 30 Hz。硬件控制器跑 60、100 或 200。GR3 上我们测到机器人状态 ≈30.29 Hz，专家动作 ≈99.88 Hz，对齐通常在 5 ms 以内。这些是很漂亮的数字。它们仍然不足以支撑按最近时间戳 join，因为"最近"可能悄悄跨过一个接管边界，或者取到错误的 validity 心跳。</p>
+
+    <p>所以身份改成因果分配：<b>唯一的 owner 只在 SDK 下发成功之后才分配 <code>control_tick_id</code>。</b>这次下发对应的已执行动作、被选来源、标签有效性和被接受的证据，共享同一个 id。Router 侧的提议 id 单独保留为 <code>decision_control_tick_id</code>，并且被明确规定不作为硬件动过的证据。任何缺失、冲突，或者只能靠时间戳回退才能 join 的区间，一律进隔离区——绝不猜成有效标签。</p>
+
+    <p>这就带出另一件值得分清楚的事。这条流水线里有五个不同的张量，大家都管它们叫"动作"：</p>
+  </div>
+
+  <figure class="wide">
+    <figcaption><b>一个动作的血缘。</b>每个箭头都是一次可能出错的变换。每个标签都是一条你事后能去读的 Parquet 流。</figcaption>
+    <svg viewBox="0 0 900 158" role="img" aria-label="从原始策略输出到已执行硬件动作的血缘">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#9aa0a7"/></marker></defs>
+      <g font-size="11">
+        <text x="168" y="14" font-size="9.5" fill="#9aa0a7" text-anchor="middle">对齐 / 混合</text>
+        <text x="352" y="14" font-size="9.5" fill="#9aa0a7" text-anchor="middle">滤波 + 映射</text>
+        <text x="536" y="14" font-size="9.5" fill="#9aa0a7" text-anchor="middle">router</text>
+        <text x="720" y="14" font-size="9.5" fill="#9aa0a7" text-anchor="middle">门 + SDK</text>
+
+        <rect x="0" y="24" width="152" height="52" fill="#fff" stroke="#1a56c4" rx="4"/>
+        <text x="12" y="44" font-weight="700" fill="#111214">原始策略输出</text>
+        <text x="12" y="61" font-size="10" fill="#6c727a">不可变的服务端回复</text>
+        <text x="0" y="95" font-family="ui-monospace,monospace" font-size="9.5" fill="#1a56c4">action.model_raw</text>
+        <path d="M154 50 L182 50" stroke="#9aa0a7" marker-end="url(#ar2)" fill="none"/>
+
+        <rect x="184" y="24" width="152" height="52" fill="#fff" stroke="#5f3fbe" rx="4"/>
+        <text x="196" y="44" font-weight="700" fill="#111214">协调后</text>
+        <text x="196" y="61" font-size="10" fill="#6c727a">RTC merge 之后</text>
+        <text x="184" y="95" font-family="ui-monospace,monospace" font-size="9.5" fill="#5f3fbe">action.model</text>
+        <path d="M338 50 L366 50" stroke="#9aa0a7" marker-end="url(#ar2)" fill="none"/>
+
+        <rect x="368" y="24" width="152" height="52" fill="#fff" stroke="#0d7059" rx="4"/>
+        <text x="380" y="44" font-weight="700" fill="#111214">映射到机器人</text>
+        <text x="380" y="61" font-size="10" fill="#6c727a">低通 + 机器人字段</text>
+        <text x="368" y="95" font-family="ui-monospace,monospace" font-size="9.5" fill="#0d7059">action.model_robot</text>
+        <path d="M522 50 L550 50" stroke="#9aa0a7" marker-end="url(#ar2)" fill="none"/>
+
+        <rect x="552" y="24" width="152" height="52" fill="#fff" stroke="#96610a" rx="4"/>
+        <text x="564" y="44" font-weight="700" fill="#111214">被选中的</text>
+        <text x="564" y="61" font-size="10" fill="#6c727a">MODEL / EXPERT / HOLD</text>
+        <text x="552" y="95" font-family="ui-monospace,monospace" font-size="9.5" fill="#96610a">control.selected_action_source</text>
+        <path d="M706 50 L734 50" stroke="#9aa0a7" marker-end="url(#ar2)" fill="none"/>
+
+        <rect x="736" y="24" width="164" height="52" fill="#fff" stroke="#ab3b35" stroke-width="1.8" rx="4"/>
+        <text x="748" y="44" font-weight="700" fill="#111214">已执行</text>
+        <text x="748" y="61" font-size="10" fill="#6c727a">机器人真正收到的</text>
+        <text x="736" y="95" font-family="ui-monospace,monospace" font-size="9.5" fill="#ab3b35">action.executed_robot</text>
+
+        <rect x="736" y="108" width="164" height="36" fill="#fdf4f3" stroke="#ab3b35" stroke-dasharray="3 3" rx="4"/>
+        <text x="748" y="123" font-size="10" font-weight="700" fill="#ab3b35">分配 control_tick_id</text>
+        <text x="748" y="137" font-size="10" fill="#6c727a">仅在下发成功之后</text>
+
+        <text x="0" y="123" font-size="10.5" fill="#6c727a">专家路径以同样方式并行记录：</text>
+        <text x="0" y="139" font-family="ui-monospace,monospace" font-size="9.5" fill="#96610a">action.expert_proposed → .expert_aligned_unclipped_robot → .expert_safe_robot</text>
+      </g>
+    </svg>
+  </figure>
+
+  <div class="col">
+    <p>一行可训练，当且仅当 <b>source = EXPERT</b>、接管参考有效、安全有效，并且 <code>label.valid = true</code>。标签本身是 <code>action.expert_aligned_unclipped_robot</code>——操作员对齐之后的意图目标。</p>
+
+    <p>这里有个显而易见的问题：为什么用<em>未裁剪</em>的意图训练，而不是机器人实际做的？因为当机器人执行的基本就是那个目标时，意图是更干净的信号。但当安全层实质性地改动了它，用意图训练就等于教出一个从未在环境中被示范过的行为。那六段被隔离的录制就是这种情况——注意那个动词：隔离，不是修复。被污染的标签没法被反推回一个好标签。</p>
+
+    <h3>接管对齐，简单说</h3>
+
+    <p>在接管的上升沿，我们恰好一次地固定两个构型——机器人的实测构型和专家设备的构型。之后的一切都是相对的：</p>
+  </div>
+
+  <div class="eq wide">
+    <math display="block">
+      <mrow>
+        <msub><mi>a</mi><mtext>expert</mtext></msub><mo>(</mo><mi>t</mi><mo>)</mo><mo>=</mo>
+        <msubsup><mi>q</mi><mn>0</mn><mtext>robot</mtext></msubsup>
+        <mo>+</mo>
+        <mrow><mo>(</mo>
+          <msup><mi>q</mi><mtext>exo</mtext></msup><mo>(</mo><mi>t</mi><mo>)</mo>
+          <mo>−</mo>
+          <msubsup><mi>q</mi><mn>0</mn><mtext>exo</mtext></msubsup>
+        <mo>)</mo></mrow>
+      </mrow>
+    </math>
+    <dl class="terms">
+      <div><dt>a<sub>expert</sub>(t)</dt><dd>对齐后的专家目标，也就是训练标签</dd></div>
+      <div><dt>q<sub>0</sub><sup>robot</sup></dt><dd>接管上升沿那一刻机器人的实测构型</dd></div>
+      <div><dt>q<sup>exo</sup>(t)</dt><dd>外骨骼当前的构型</dd></div>
+      <div><dt>q<sub>0</sub><sup>exo</sup></dt><dd>同一上升沿时外骨骼的构型</dd></div>
+    </dl>
+  </div>
+
+  <div class="col">
+    <p>没有它，你一接管，机器人就会朝外骨骼那个毫不相干的绝对构型跳过去。有了它，转移过来的是操作员的<em>运动</em>——那本来就是你想录的东西。</p>
+
+    <h3>一个变成了数据集属性的运行时常量</h3>
+
+    <p>这块我最喜欢的小恐怖故事。QNexo adapter 的默认值是 <code>EXO_WAIST_YAW_SPEED = 0.1</code>，adapter 里再除以 100，得到每次更新 0.001 rad——在设计的 100 Hz 环路下大约 <b>0.1 rad/s</b>。这非常慢。操作员注意到了。</p>
+
+    <p>凭手感把它提到 0.5，遥操作体验好很多，同时也改变了下一个 checkpoint 将要学习的纠正分布。因为模型预测的是未来目标位置而不是速度，更慢的标签只是意味着在 H32 horizon 上更小的目标变化量。而当同样的视觉和状态情境同时带着快的预训练标签和慢的 DAgger 标签，损失会很愉快地把它们平均成犹豫。</p>
+
+    <p>正确的标定做法是从原始 episode 里算逐关节的速度和加速度分位数，然后去匹配它们。另外：不要试图靠给 yaw 值乘一个系数来修复旧的慢数据。那会破坏时间上以及手臂／腰部之间的协调，产出的标签单看都合理、合起来不可能。</p>
+
+    <h3>还有，请把视频按视频编码</h3>
+
+    <p>数值、事件和对齐元数据属于 Parquet。相机帧不属于，而且这个账算得根本不接近。一个真实的 30 Hz 双臂 PiPER episode，三路 1280×720 RGB 以 Parquet 数组存储：</p>
+
+    <blockquote>
+      <p>相机流：<b>4.59 GB</b>。全部 14 条数值／事件／标签流加起来：<b>0.59 MB</b>。episode 时长：<b>52.6 秒</b>。</p>
+    </blockquote>
+
+    <p>这正是你能预测出来的结果——3 × 1280 × 720 × 3 字节是每帧 2.76 MB，乘 30 Hz 是 82.9 MB/s，乘 52.6 秒是 4.36 GB。对带相机噪声的 uint8 数组，Parquet 压缩基本没有作用，所以图像最后大约是其他一切的 <b>7,700 倍</b>，而且没有任何压缩设置能改变这个比例。编码成 H.264 MP4，把 帧 → 时间戳 → <code>control_tick_id</code> 的映射留在表格元数据里，因果 join 就仍然成立。</p>
+  </div>
+</section>
+
+<!-- 7 -->
+<section id="plumbing">
+  <div class="col">
+    <div class="num">07</div>
+    <h2>最不性感的解法：一个 checkpoint 一个文件</h2>
+
+    <p>上面这些没有一件是有趣的研究。但每一件都要花掉真实的天数。真正让这些事不再疼的东西很无聊：让每个问题都恰好有一个文件能回答。</p>
+
+    <p>我们最后收敛到的规矩是：<b>一个新 checkpoint 需要的应该是一份 descriptor，而不是 launcher 里的一个新分支。</b>launcher 需要知道的关于某个模型的一切都是数据。launcher 本身里没有任何 <code>if model == …</code>。</p>
+  </div>
+
+  <div class="code wide">
+    <span class="f">policy/&lt;POLICY&gt;/deployments/&lt;deployment&gt;.yml &nbsp;·&nbsp; 节选</span>
+<pre data-lang="yaml">bundle:                          # 身份与不可变性
+  default_path: model-store/models/&lt;policy-family&gt;/&lt;checkpoint&gt;
+  required:     [checkpoint/model.safetensors, contract.json]
+  verifier:     policy/&lt;POLICY&gt;/verify_bundle.py
+
+policy:                          # 时序合同，与 contract.json 一致
+  action_frequency_hz:   30
+  action_horizon:        32
+  default_execute_chunk: 16
+  default_execute_mode:  auto    # 跟随模型的 execute_prefix_steps
+
+observation:
+  camera_profile: camera_profiles/piper-x-dual-rgb-1280x720-30.yml
+
+server:
+  default_mode: managed          # launcher 拥有 PolicyServer 的生命周期
+
+tasks:
+  catalog_path: contract.json    # 权威在 bundle，不在这个文件
+
+intake:
+  provider:       aliyun_oss
+  expected_bytes: 7245891272     # 精确大小，会被校验
+
+qualification:
+  verifier_args: [--full-manifest]
+  tests:         [ tests/test_inference.py, …, tests/test_pi05_piper_dagger50_h32_v1.py ]</pre>
+  </div>
+
+  <div class="col">
+    <p>从上往下读一遍，你就能回答：哪份权重、怎么校验、什么频率、用哪些相机、怎么服务、走哪张 graph、用哪些 prompt、从哪来、由哪些测试证明。这就是全部意图。</p>
+
+    <p>然后两条命令覆盖整个生命周期——<code>onboard</code> 负责首次 intake，<code>qualify</code> 负责已安装的运行时。同一套 stage 机器：把每个文件对着三份 manifest 校验（本地哈希、本地 manifest、发布方 manifest），准备隔离的模型运行时，跑 descriptor 自己的测试列表，绑定一个<b>空闲的 loopback 端口</b>，启动 managed server，用一份符合合同形状的合成观测探测它、断言 30 Hz 下有限的 <code>[32,14]</code>，最后做一次禁写的 launcher dry run。产出是一份 JSON 报告和逐阶段编号日志。</p>
+
+    <div class="note warn">
+      <span class="lbl">为什么那句话里有"空闲的 loopback 端口"</span>
+      <p>因为看到 <code>address already in use</code> 时，最诱人的做法是把占着端口的东西全杀掉，而我们见过这么干的下场。正确做法是找出监听者并校验它的 WebSocket <code>HELLO</code>：部署身份一致就显式复用；不一致就只停 launcher 自己拥有的那个进程。</p>
+      <p>一个来自别的 checkpoint、恰好在对的端口上应答的野生 server，会自信地给你喂一整个下午的错误动作，而你的日志里不会有任何一行看起来可疑。</p>
+    </div>
+
+    <p>这一切底下是一条我们严格得有点不讲道理的不变量：<b>有且只有一个进程可以调 SDK。</b>模型候选和专家候选都只是提议。router 选来源，机器人自有的门放行或 HOLD，owner 写入，recorder 旁观一切、而且永远没有写的能力。</p>
+  </div>
+
+  <figure class="wide">
+    <figcaption><b>谁有资格碰机器人。</b>两个候选生产者，一次选择，一道门，一个写者。</figcaption>
+    <svg viewBox="0 0 900 342" role="img" aria-label="运行时所有权示意图">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#9aa0a7"/></marker>
+        <marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1a56c4"/></marker>
+      </defs>
+      <g font-size="11.5" fill="#6c727a">
+        <rect x="0" y="10" width="188" height="122" fill="#fff" stroke="#1a56c4" stroke-width="1.2" rx="4"/>
+        <text x="14" y="31" font-size="10" font-weight="700" fill="#1a56c4" letter-spacing="1">模型候选</text>
+        <text x="14" y="53">三路相机 + 14 维状态</text>
+        <text x="14" y="71">→ 观测 adapter</text>
+        <text x="14" y="89">→ PolicyServer（WebSocket）</text>
+        <text x="14" y="107">→ chunk 调度器 + RTC</text>
+        <text x="14" y="125" font-family="ui-monospace,monospace" font-size="9.5" fill="#9aa0a7">action.model_raw → .model</text>
+
+        <rect x="0" y="198" width="188" height="122" fill="#fff" stroke="#96610a" stroke-width="1.2" rx="4"/>
+        <text x="14" y="219" font-size="10" font-weight="700" fill="#96610a" letter-spacing="1">专家候选</text>
+        <text x="14" y="241">QNexo 外骨骼 / 主臂</text>
+        <text x="14" y="259">→ FK + retarget（Mink IK）</text>
+        <text x="14" y="277">→ 接管参考对齐</text>
+        <text x="14" y="295" font-family="ui-monospace,monospace" font-size="9.5" fill="#9aa0a7">proposed → aligned → safe</text>
+
+        <rect x="250" y="104" width="152" height="122" fill="#fff" stroke="#111214" stroke-width="1.4" rx="4"/>
+        <text x="264" y="125" font-size="10" font-weight="700" fill="#111214" letter-spacing="1">ROUTER</text>
+        <text x="264" y="147">MODEL / EXPERT / HOLD</text>
+        <text x="264" y="165">唯一来源</text>
+        <text x="264" y="183">唯一 generation</text>
+        <text x="264" y="205">接管上升沿固定</text>
+        <text x="264" y="221">两个参考</text>
+
+        <rect x="454" y="104" width="152" height="122" fill="#fff" stroke="#ab3b35" stroke-width="1.4" rx="4"/>
+        <text x="468" y="125" font-size="10" font-weight="700" fill="#ab3b35" letter-spacing="1">最终门</text>
+        <text x="468" y="147">schema · 有限 · 新鲜</text>
+        <text x="468" y="165">关节限位 · 步长限制</text>
+        <text x="468" y="189">原子 PASS / HOLD</text>
+        <text x="468" y="207">机器人自有，不可绕过</text>
+
+        <rect x="658" y="104" width="152" height="122" fill="#fff" stroke="#0d7059" stroke-width="1.8" rx="4"/>
+        <text x="672" y="125" font-size="10" font-weight="700" fill="#0d7059" letter-spacing="1">唯一 OWNER</text>
+        <text x="672" y="147">唯一可以调用</text>
+        <text x="672" y="165">SDK writer 的进程</text>
+        <text x="672" y="189">下发成功之后</text>
+        <text x="672" y="207">才分配 control_tick_id</text>
+
+        <rect x="848" y="132" width="52" height="66" fill="#f6f6f3" stroke="#d6d5cf" rx="4"/>
+        <text x="860" y="160" font-size="10" font-weight="700" fill="#111214">CAN</text>
+        <text x="860" y="176" font-size="10" font-weight="700" fill="#111214">总线</text>
+
+        <path d="M188 71 L218 71 L218 152 L248 152" fill="none" stroke="#1a56c4" stroke-width="1.3" marker-end="url(#arb)"/>
+        <path d="M188 259 L218 259 L218 178 L248 178" fill="none" stroke="#96610a" stroke-width="1.3" marker-end="url(#ar)"/>
+        <path d="M402 165 L452 165" fill="none" stroke="#9aa0a7" stroke-width="1.3" marker-end="url(#ar)"/>
+        <path d="M606 165 L656 165" fill="none" stroke="#9aa0a7" stroke-width="1.3" marker-end="url(#ar)"/>
+        <path d="M810 165 L846 165" fill="none" stroke="#9aa0a7" stroke-width="1.3" marker-end="url(#ar)"/>
+        <path d="M848 198 L848 250 L64 250" fill="none" stroke="#d6d5cf" stroke-width="1" stroke-dasharray="3 3"/>
+        <text x="628" y="244" font-size="10" fill="#9aa0a7">实测反馈 + 下发确认</text>
+
+        <rect x="250" y="280" width="560" height="44" fill="#f6f6f3" stroke="#d6d5cf" stroke-dasharray="3 3" rx="4"/>
+        <text x="266" y="299" font-size="10" font-weight="700" fill="#6c727a" letter-spacing="1">规范 RECORDER —— 读每一个阶段，不写任何硬件</text>
+        <text x="266" y="316" font-family="ui-monospace,monospace" font-size="9.5">observation · model_raw · model · model_robot · expert_* · selected_source · executed_robot · label.valid</text>
+        <path d="M326 226 L326 278" fill="none" stroke="#d6d5cf" stroke-width="1" stroke-dasharray="2 3"/>
+        <path d="M530 226 L530 278" fill="none" stroke="#d6d5cf" stroke-width="1" stroke-dasharray="2 3"/>
+        <path d="M734 226 L734 278" fill="none" stroke="#d6d5cf" stroke-width="1" stroke-dasharray="2 3"/>
+      </g>
+    </svg>
+    <div class="legend">
+      <span><i style="background:#fff;border-color:#1a56c4"></i>模型路径 —— 只是提议，没有硬件权限</span>
+      <span><i style="background:#fff;border-color:#96610a"></i>专家路径 —— 只是提议，没有硬件权限</span>
+      <span><i style="background:#fff;border-color:#ab3b35"></i>机器人自有安全，原子 PASS/HOLD</span>
+      <span><i style="background:#fff;border-color:#0d7059"></i>唯一拥有 SDK 写权限的进程</span>
+      <span><i style="background:#f6f6f3;border-color:#d6d5cf"></i>证据 —— 只读旁路</span>
+    </div>
+  </figure>
+
+  <div class="col">
+    <p>VLM 站在这一切之上，而这个位置是刻意的。任务选择和恢复推理是慢速、会出错的；运动控制是硬实时的。把它们直接接在一起，一次两秒的语言模型往返就会跑进一个 33 毫秒的控制环里。</p>
+
+    <p>所以我们的 supervisor 不是第二张 Dora graph。它是一个独立进程，只通过带认证的 loopback API 通信，只能发出 checkpoint 那份精确的五条 prompt 目录里的条目（目录之外一律 fail closed），而且从不发关节目标。它的 rollout 预算在唯一写者处按实际收到的 model action 计数——不看墙钟，也不信它自己的计数。rollout 一旦开始，实时路径完全不变，VLM 不在里面。</p>
+  </div>
+</section>
+
+<!-- 8 -->
+<section id="boring">
+  <div class="col">
+    <div class="num">08</div>
+    <h2>那些无聊的答案，和我们不再混着用的词</h2>
+
+    <p>不是每个谜都很深。下面这些是我们现在会先查的，大致按"最后发现真是它"的频率排序。</p>
+  </div>
+
+  <div class="table wide">
+    <table>
+      <thead><tr><th style="width:23%">症状</th><th style="width:25%">我们很想做的事</th><th>通常真正的原因</th></tr></thead>
+      <tbody>
+        <tr><td>机器人完全不动</td><td>怪推理，加平滑</td><td><code>ENABLE_WRITE=0</code>。频率高得惊人。然后才是生命周期状态、控制器模式、新鲜的 SDK 反馈、实际下发计数。</td></tr>
+        <tr><td>反馈报 0 Hz</td><td>调低新鲜度阈值</td><td>CAN 身份、供电、控制器模式。放宽的看门狗造不出缺失的反馈——它只是让你去指挥一台你看不见的机器人。</td></tr>
+        <tr><td>能加载但行为随机</td><td>以为形状对上了就是兼容</td><td>归一化统计量、tokenizer、相机键、状态字段顺序、单位、动作逆变换。对着 bundle 比，别对着记忆比。</td></tr>
+        <tr><td>左右反了</td><td>把 UI 标签换到看起来对为止</td><td>顺着序列号 → instance 角色 → graph 输出 → 观测键 → 训练相机角色追一遍。然后去相机前挥手。</td></tr>
+        <tr><td>相机启动后卡死</td><td>把期望的 USB 3.2 放宽到 2.1</td><td>带宽、hub、线缆。frame-number 缺口才是测量值；放宽身份校验造不出帧。</td></tr>
+        <tr><td>停—动—停</td><td>把混合加长</td><td>队列饥饿、被拒的替换、迟到的结果。加长混合只会<em>更糟</em>。见 §3。</td></tr>
+        <tr><td>动作过激</td><td>把所有平滑器一次全加上</td><td>把原始逐步速度和训练分位数比较，然后只加一个能归因的处理器。</td></tr>
+        <tr><td>数据集巨大</td><td>调高 Parquet 压缩</td><td>数值走 Parquet，相机走 MP4。比例约 7,700:1，压缩设置只是噪声。</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>这些背后的做法是同一个：不要从最终的视觉症状开始调。跟着一条观测和一个动作穿过整个系统，找到<em>数值第一次不再符合它的合同的那个边界</em>。五个问题，按顺序——模型收到了什么，它返回了什么，运行时调度了什么，owner 接受了什么，物理上发生了什么。大多数争论的发生，是因为有人从第一个问题直接跳到了第五个。</p>
+
+    <h3>五组混起来之后让我们付出真实时间的词</h3>
+
+    <p>这里每一组，一旦在某个人脑子里或某份文档里塌缩掉，都会产出一类特别难找的 bug——因为所有相关的人用的是同一个词。</p>
+
+    <ul>
+      <li><b>当前 vs 历史。</b>当前代码才是事实来源。八月的一段聊天记录，是关于一个此后可能已经变了的系统的案例。§6 里的 recorder bug 是真的，也已经修了；能迁移的是那些失败的<em>形状</em>。</li>
+      <li><b>客户端 RTC vs 模型原生 guidance。</b>上面说过了。开预取不会给你任何关于条件化的东西。</li>
+      <li><b>原始 vs 协调后 vs 已执行。</b>三个不同的张量。一旦开了混合，协调后的流就不再逐字节等于原始回复，而在证据链路里把它标成"raw"，会污染它下游的一切。</li>
+      <li><b>原始 episode vs 派生视图。</b>完整录制保留上下文；训练视图是它的一个严格投影。两个都留着，不可变，这样一个标注决定可以被重新推导，而不是拿来吵架。</li>
+      <li><b>资格验证 vs 移动授权。</b>报告全绿证明的是 restore、合同形状、服务一致性和一次禁写 dry run。它对任务成功率什么都没说——bundle 自己的 <code>evidence_scope.does_not_establish</code> 就明说了。让真机动起来，需要一次显式的 live-run 请求、写授权门，以及一个手放在急停上的人在场的监督 canary。</li>
+    </ul>
+
+    <h3>我们现在落在哪里</h3>
+
+    <p>我不觉得这里面有什么新东西，如果有我反而会有点意外。但它非常一致：<b>每一次部署变得玄学，答案都在数据集里——而每一次我们改成在运行时层去修它，我们都把下一个 checkpoint 弄得更差了。</b></p>
+
+    <p>从数据里采起始位姿。从数据里测专家速度。从数据里恢复相机角色和时序。把动作语义追溯回那个生成数据的变换。</p>
+
+    <p>训练合同显然修不了一根断掉的 CAN 线，也修不了一台坏相机。它做的是：不让硬件故障被误判成模型故障，也不让一次分布外部署被运行时小技巧"修好"、然后悄悄毒化下一轮训练。</p>
+
+    <p>还有不少我们没有好答案的东西。我们的示范里没有真正的起始位姿多样性，而再聪明的 medoid 筛选也造不出从未被记录过的覆盖。我们也没有一个有原则的方法去选 DAgger 的 replay 比例——40/60 是"有效"的那个，不是推导出来的那个。而且我们仍然没法从单次 rollout 判断，一个 checkpoint 是今天状态不好，还是学到了某种微妙的错误。如果你对其中任何一个有好答案，我是真的想听听。</p>
+  </div>
+</section>
+
+<section id="hardware">
+  <div class="col">
+    <div class="num">09 · 附录</div>
+    <h2>把机器人开起来</h2>
+    <p class="sec-lede">GR3 和双臂 PiPER 在不同的物理边界上出问题。GR3 是承重人形：支撑和站立状态排在最前面。PiPER X 是固定底座，但一条失能的手臂仍然会在重力下掉下来：身份、CAN 反馈和伺服使能状态排在最前面。</p>
+
+    <div class="note warn">
+      <span class="lbl">这一节暂时只维护英文版</span>
+      <p>两台机器人的完整上电与排障 runbook 目前由另一条工作线在持续更新（GR3 吊装与 PdStand 链路、PiPER 的双 CAN 身份与使能位、三相机角色核验、重力安全恢复）。</p>
+      <p>硬件流程写错会真的伤到人或设备，所以在那边稳定之前，这里不放一份可能已经过期的翻译。请直接看 <a href="index.html#hardware">英文版的 §09 Hardware bring-up &amp; troubleshooting</a>，那是唯一的现行版本。</p>
+    </div>
+  </div>
+</section>
+
+<div class="end col">
+  <h2>参考资料与实现边界</h2>
+  <ul>
+    <li>可执行的模型与机器人 contract</li>
+    <li>与机器人无关的 action-chunk runtime</li>
+    <li>带版本的 deployment descriptor</li>
+    <li>统一的 DAgger / HITL 数据合同</li>
+    <li>遥操作控制语义</li>
+    <li>现场日志与 qualification 报告</li>
+  </ul>
+  <p class="colophon">文中的测量来自已录制的机器人 episode、经过校验的 bundle contract 和现场日志。公开版本有意省略现场设备标识、私有仓库位置和可识别的实验室影像。本文不构成任何硬件运动授权。 &nbsp;·&nbsp; <a href="index.html">English</a></p>
+</div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function highlight(pre) {
+    var lines = pre.textContent.split("\n").map(function (line) {
+      var comment = "", quotes = 0, cut = -1;
+      for (var i = 0; i < line.length; i++) {
+        if (line[i] === '"') quotes++;
+        else if (line[i] === "#" && quotes % 2 === 0) { cut = i; break; }
+      }
+      if (cut >= 0) { comment = line.slice(cut); line = line.slice(0, cut); }
+      var strings = [];
+      var body = line.replace(/"(?:[^"\\]|\\.)*"/g, function (m, off) {
+        strings.push({ t: m, key: /^\s*:/.test(line.slice(off + m.length)) });
+        return "";
+      });
+      body = esc(body);
+      body = body.replace(/^(\s*)([A-Za-z_][\w.\/-]*)(\s*:)/, '$1<span class="k">$2</span>$3');
+      body = body.replace(/\b(\d[\d_.]*)\b/g, '<span class="n">$1</span>');
+      body = body.replace(/([{}\[\],])/g, '<span class="p">$1</span>');
+      var si = 0;
+      body = body.replace(//g, function () {
+        var s = strings[si++];
+        return '<span class="' + (s.key ? "k" : "s") + '">' + esc(s.t) + "</span>";
+      });
+      return body + (comment ? '<span class="c">' + esc(comment) + "</span>" : "");
+    });
+    pre.innerHTML = lines.join("\n");
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("pre[data-lang]"), highlight);
+
+  var NS = "http://www.w3.org/2000/svg";
+  function el(name, attrs, text) {
+    var node = document.createElementNS(NS, name);
+    for (var k in attrs) node.setAttribute(k, attrs[k]);
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  var svg = document.getElementById("rtcSvg");
+  if (!svg) return;
+
+  var C = { done:"#ececE7", flight:"#c9dcf7", queued:"#f9f9f6", drop:"#f8dedd", keep:"#f5e0b9", mix:"#ddd4f6", fresh:"#c6e6db" };
+  var S = { done:"#b4b7b0", flight:"#1a56c4", queued:"#d6d5cf", drop:"#ab3b35", keep:"#96610a", mix:"#5f3fbe", fresh:"#0d7059" };
+
+  [[C.done,S.done,"旧计划中在请求发出之前就已经执行掉的行"],
+   [C.flight,S.flight,"<b>推理在途期间</b>执行掉的旧计划行 —— 这就是对齐偏移"],
+   [C.queued,S.queued,"回复到达时仍然排在队列里的旧计划行"],
+   [C.drop,S.drop,"被<b>丢弃</b>的替换行：它们的执行时刻已经过去"],
+   [C.keep,S.keep,"<b>保留</b> —— 换计划之后被刻意留下的旧值"],
+   [C.mix,S.mix,"<b>混合</b> —— 对齐后的新旧行按权重相加"],
+   [C.fresh,S.fresh,"<b>仅新计划</b> —— 替换计划本身，未经改动"]
+  ].forEach(function (row) {
+    var s = document.createElement("span");
+    s.innerHTML = '<i style="background:' + row[0] + ';border-color:' + row[1] + '"></i>' + row[2];
+    document.getElementById("rtcLegend").appendChild(s);
+  });
+
+  var ids = ["rH", "rF", "rL", "rP", "rT"], caps = ["vH", "vF", "vL", "vP", "vT"];
+  var mode = document.getElementById("rtcMode");
+  var out = document.getElementById("rtcOut");
+
+  function drawRtc() {
+    var H = +document.getElementById("rH").value;
+    var f = +document.getElementById("rF").value;
+    var lat = +document.getElementById("rL").value;
+    var P = +document.getElementById("rP").value;
+    var T = +document.getElementById("rT").value;
+    var blend = mode.value === "blend";
+    ids.forEach(function (id, i) { document.getElementById(caps[i]).textContent = document.getElementById(id).value; });
+
+    var stepMs = 1000 / f;
+    var latSteps = Math.max(0, Math.ceil(lat / stepMs));
+    var trigger = Math.min(H - 1, latSteps + 1 + (blend ? P + T : 0));
+    var before = Math.max(0, H - trigger);
+    var offset = Math.min(latSteps, H - 1);
+    var accept = before + offset;
+    var preserved = blend ? Math.min(P, Math.max(0, H - accept), Math.max(0, H - offset - 1)) : 0;
+    var trans = blend ? Math.min(T, Math.max(0, H - accept - preserved), Math.max(0, H - offset - preserved - 1)) : 0;
+
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var L = 104, R = 900, TOT = before + H, cw = (R - L) / TOT, ch = 22;
+    var yA = 46, yB = 132;
+
+    [[yA, "旧计划", "正在", "执行"], [yB, "替换计划", "已平移到", "对齐位置"]].forEach(function (r) {
+      svg.appendChild(el("text", { x: 0, y: r[0] - 8, "font-size": 10.5, "font-weight": 700, fill: "#111214", "letter-spacing": ".08em" }, r[1]));
+      svg.appendChild(el("text", { x: 0, y: r[0] + 8, "font-size": 10, fill: "#9aa0a7" }, r[2]));
+      svg.appendChild(el("text", { x: 0, y: r[0] + 21, "font-size": 10, fill: "#9aa0a7" }, r[3]));
+    });
+
+    var i, x, fill, stroke;
+    for (i = 0; i < H; i++) {
+      x = L + i * cw;
+      if (i < before)      { fill = C.done;   stroke = S.done; }
+      else if (i < accept) { fill = C.flight; stroke = S.flight; }
+      else                 { fill = C.queued; stroke = S.queued; }
+      svg.appendChild(el("rect", { x: x + .6, y: yA, width: Math.max(1, cw - 1.2), height: ch, fill: fill, stroke: stroke, "stroke-width": .9, rx: 1.5 }));
+    }
+    for (i = 0; i < H; i++) {
+      x = L + (before + i) * cw;
+      var rel = i - offset;
+      if (rel < 0)                      { fill = C.drop;  stroke = S.drop; }
+      else if (rel < preserved)         { fill = C.keep;  stroke = S.keep; }
+      else if (rel < preserved + trans) { fill = C.mix;   stroke = S.mix; }
+      else                              { fill = C.fresh; stroke = S.fresh; }
+      svg.appendChild(el("rect", { x: x + .6, y: yB, width: Math.max(1, cw - 1.2), height: ch, fill: fill, stroke: stroke, "stroke-width": .9, rx: 1.5 }));
+    }
+
+    var lane = 0;
+    function span(from, count, color, label) {
+      if (count <= 0) return;
+      var x0 = L + (before + from) * cw + .6, x1 = L + (before + from + count) * cw - .6, y = yB + ch + 6;
+      svg.appendChild(el("path", { d: "M" + x0 + " " + (y + 4) + "L" + x0 + " " + y + "L" + x1 + " " + y + "L" + x1 + " " + (y + 4), fill: "none", stroke: color, "stroke-width": 1 }));
+      var narrow = (x1 - x0) < label.length * 5.6;
+      var ly = y + (narrow && lane % 2 ? 28 : 16);
+      if (narrow) lane++;
+      svg.appendChild(el("text", { x: (x0 + x1) / 2, y: ly, "font-size": 9.5, "font-weight": 600, "text-anchor": "middle", fill: color }, label));
+    }
+    span(0, offset, S.drop, "丢弃 " + offset);
+    span(offset, preserved, S.keep, "保留 " + preserved);
+    span(offset + preserved, trans, S.mix, "混合 " + trans);
+    span(offset + preserved + trans, H - offset - preserved - trans, S.fresh, "仅新计划");
+
+    function marker(col, label, sub, color, side) {
+      var mx = L + col * cw;
+      var anchor = side === "left" && mx > 230 ? "end" : "start";
+      var dx = anchor === "end" ? -7 : 7;
+      svg.appendChild(el("line", { x1: mx, y1: yA - 26, x2: mx, y2: yB + ch + 4, stroke: color, "stroke-width": 1, "stroke-dasharray": "3 3" }));
+      svg.appendChild(el("circle", { cx: mx, cy: yA - 26, r: 3, fill: color }));
+      svg.appendChild(el("text", { x: mx + dx, y: yA - 30, "font-size": 10.5, "font-weight": 700, fill: color, "text-anchor": anchor }, label));
+      svg.appendChild(el("text", { x: mx + dx, y: yA - 18, "font-size": 9.5, fill: "#9aa0a7", "text-anchor": anchor }, sub));
+    }
+    marker(before, "发出请求", "队列还剩 " + trigger + " 行", S.flight, "left");
+    marker(accept, "接受回复", offset + " 行已过期", S.fresh, "right");
+
+    var yAxis = yB + ch + 42;
+    svg.appendChild(el("line", { x1: L, y1: yAxis, x2: R, y2: yAxis, stroke: "#d6d5cf" }));
+    for (i = 0; i <= TOT; i += Math.max(2, Math.round(TOT / 9))) {
+      x = L + i * cw;
+      svg.appendChild(el("line", { x1: x, y1: yAxis, x2: x, y2: yAxis + 4, stroke: "#d6d5cf" }));
+      svg.appendChild(el("text", { x: x, y: yAxis + 16, "font-size": 9.5, fill: "#9aa0a7", "text-anchor": "middle" }, "t+" + i));
+    }
+    svg.appendChild(el("text", { x: L, y: yAxis + 32, "font-size": 9.5, fill: "#9aa0a7" }, "一格 = 一个控制步 = " + stepMs.toFixed(1) + " ms"));
+
+    var firstNew = before + offset + preserved + trans;
+    out.innerHTML =
+      cell(latSteps, "延迟折合步数", "ceil(" + lat + " / " + stepMs.toFixed(1) + " ms)") +
+      cell(trigger, "触发深度", blend ? "延迟 + 1 + " + P + " + " + T : "延迟 + 余量") +
+      cell(before, "先执行掉", "在请求发出之前") +
+      cell(offset, "对齐偏移", "从回复里丢掉的行数") +
+      cell("t+" + firstNew, "第一行纯新计划", "保留 " + preserved + " 行，混合 " + trans + " 行") +
+      cell((H * stepMs / 1000).toFixed(2) + " s", "计划长度", H + " 行 @ " + f + " Hz") +
+      (trigger >= H - 1 ? cell("!", "已饱和", "推理比整个 horizon 还慢") : "");
+  }
+  function cell(v, k, sub) { return "<div><b>" + v + "</b>" + k + "<br>" + sub + "</div>"; }
+  ids.forEach(function (id) { document.getElementById(id).addEventListener("input", drawRtc); });
+  mode.addEventListener("change", drawRtc);
+  drawRtc();
+})();
+</script>
+</body>
+</html>

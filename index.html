@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="A practical guide to real-robot VLA infrastructure: runtime contracts, action timing, RTC, trajectory processing, DAgger data, model onboarding, and hardware recovery.">
-<title>Real-Robot VLA Infrastructure: A Practical Guide</title>
+<meta name="description" content="A practical guide to real-robot deployment infrastructure: runtime contracts, action timing, RTC, trajectory processing, DAgger data, model onboarding, and hardware recovery.">
+<title>Real-Robot Deployment Infrastructure: A Practical Guide</title>
 <style>
 :root{
   color-scheme: light;
@@ -212,6 +212,7 @@ tbody tr:last-child td{border-bottom:0}
 }
 
 /* ── hardware runbooks ────────────────────── */
+.field-photo{display:block;width:auto;max-width:100%;max-height:560px;margin:0 auto;object-fit:contain;background:#f1f1ed}
 .hardware-index{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:34px 0 52px}
 .hardware-index a{display:block;min-height:126px;padding:20px 22px;border:1px solid var(--line2);border-radius:7px;
   background:var(--surface);color:var(--muted);text-decoration:none;transition:border-color .15s,transform .15s}
@@ -354,15 +355,17 @@ figure{margin:40px 0}
 <main id="main-content">
 
 <header class="wide article-head" id="top">
-  <h1>Real-robot VLA infrastructure: a practical guide</h1>
+  <h1>Real-robot deployment infrastructure: a practical guide</h1>
   <p class="post-meta"><a href="https://github.com/Unieggy">Michael Lai</a><br>September 2026</p>
 
   <div class="intro">
+    <p>If you are reading this, you have probably been handed the least glamorous—and occasionally most frightening—part of the robot stack: everything between a checkpoint and hardware that can actually move. Congratulations, and good luck. The failures are usually smaller, stranger, and more annoying than the architecture diagram suggests.</p>
+
     <p>A checkpoint can restore cleanly, return finite actions, and still be nearly useless on hardware. In our deployments, the failure was rarely “the model did not load.” It was usually a smaller mismatch: one camera role, one unit, one timing assumption, one start pose, or one recorder label.</p>
 
-    <p>Over two months of working across GR3, dual-PiPER X, and Astribot S1, the same pattern kept showing up. The runtime was guessing details that the training data had already fixed. Once those details drifted, adding more smoothing or relaxing a watchdog only made the real cause harder to see.</p>
+    <p>Over two months of working across GR3, dual-PiPER X, and Astribot S1, the same pattern kept showing up: the runtime was guessing details that the training data had already fixed. This guide records the resulting workflow—establish the raw policy first, measure timing before tuning RTC, choose motion processing for a specific artifact, and make DAgger collection reproduce the original training contract.</p>
 
-    <p>This is a field account of those failures and the deployment structure that came out of them: establish the raw policy first, measure timing before tuning RTC, choose motion processing for a specific artifact, and make DAgger collection reproduce the original training contract.</p>
+    <p>If you change a major part of the runtime—a robot integration, timing semantics, recorder schema, or safety path—update this guide in the same pull request. Future you, or the next unlucky person, should inherit the evidence instead of reconstructing the system from terminal history.</p>
   </div>
 </header>
 
@@ -1107,6 +1110,11 @@ qualification:
       <div class="hardware-step"><span class="num">04</span><b>Load check</b><span>Floor reaction and active recovery confirmed.</span></div>
       <div class="hardware-step"><span class="num">05</span><b>Policy</b><span>One initialization and exact READY handoff.</span></div>
     </div>
+
+    <figure>
+      <figcaption><b>Figure 6A · GR3 supported during PdStand bring-up</b><span>The lift stays attached while standing-controller state and load-bearing behavior are verified.</span></figcaption>
+      <img class="field-photo" src="assets/gr3-pdstand-lift-supported.png" width="1080" height="1440" decoding="async" alt="Side view of a GR3 humanoid supported by an overhead lift while entering PdStand">
+    </figure>
 
     <div class="body">
       <h3>Five checks, then run</h3>

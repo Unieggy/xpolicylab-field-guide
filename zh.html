@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="真机 VLA 基础设施实战指南：运行时合同、动作时序、RTC、轨迹处理、DAgger 数据、模型接入与硬件恢复。">
-<title>真机 VLA 基础设施实战指南</title>
+<meta name="description" content="真机部署基础设施实战指南：运行时合同、动作时序、RTC、轨迹处理、DAgger 数据、模型接入与硬件恢复。">
+<title>真机部署基础设施实战指南</title>
 <style>
 :root{
   color-scheme: light;
@@ -206,9 +206,11 @@ tbody tr:last-child td{border-bottom:0}
 
 <header class="col">
   <div class="kicker">XPolicyLab · 现场笔记</div>
-  <h1>真机 VLA 基础设施实战指南</h1>
+  <h1>真机部署基础设施实战指南</h1>
+  <p class="dek">如果你正在读这篇东西，大概率说明机器人系统里最不光鲜、偶尔也最吓人的那一段已经落到你手上了：把 checkpoint 和真正会动的硬件之间那一整条链路接起来。恭喜，也祝你好运。实际出问题的地方通常比架构图写得更小、更怪，也更烦。</p>
   <p class="dek">过去几个月我们一直在把 Pi0.5 和 FastWAM 的 checkpoint 装到真硬件上——一台 GR3 人形、一套双臂 PiPER、一台 Astribot S1。几乎所有我们一开始的假设，最后都以某种具体又烦人的方式被证明是错的。下面这些是值得写下来的。</p>
   <p class="dek">如果这些事情有一条共同的线索，那就是：<b>数据集不只是训练输入，它是你手上关于运行时最可靠的一份规格书。</b>README 可能是错的，训练那个 checkpoint 的人可能已经离职了。但数据集不会在这些事情上撒谎：模型看到了什么、顺序如何、单位是什么、频率多少、从什么起始位姿开始。</p>
+  <p class="dek">如果你改了 runtime 的关键部分——新机器人、时序语义、录制格式或安全链路——请在同一个 PR 里把这篇指南一起更新。别让未来的你，或者下一个倒霉的人，靠翻 terminal history 做系统考古。</p>
   <div class="byline">
     <span><b>机器人</b> GR3 · 双臂 PiPER X · Astribot S1 &nbsp;·&nbsp; <b>策略</b> Pi0.5 · FastWAM</span><br>
     <span>这里的每个数字都能追到一条日志、一个录好的 episode 或一份 bundle 合同。本文不构成任何让机器人动起来的授权。</span>

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="把 VLA checkpoint 装到真机上让我们意外的六件事：为什么张量形状对了等于没对，为什么平滑做得越多看起来越不平滑，为什么更对称的起始位姿反而更糟，以及为什么拿自己采的纠正数据微调会让模型更差。">
-<title>把 VLA 装到真机上，让我们意外的六件事</title>
+<meta name="description" content="真机 VLA 基础设施实战指南：运行时合同、动作时序、RTC、轨迹处理、DAgger 数据、模型接入与硬件恢复。">
+<title>真机 VLA 基础设施实战指南</title>
 <style>
 :root{
   color-scheme: light;
@@ -206,7 +206,7 @@ tbody tr:last-child td{border-bottom:0}
 
 <header class="col">
   <div class="kicker">XPolicyLab · 现场笔记</div>
-  <h1>把 VLA 装到真机上，让我们意外的六件事</h1>
+  <h1>真机 VLA 基础设施实战指南</h1>
   <p class="dek">过去几个月我们一直在把 Pi0.5 和 FastWAM 的 checkpoint 装到真硬件上——一台 GR3 人形、一套双臂 PiPER、一台 Astribot S1。几乎所有我们一开始的假设，最后都以某种具体又烦人的方式被证明是错的。下面这些是值得写下来的。</p>
   <p class="dek">如果这些事情有一条共同的线索，那就是：<b>数据集不只是训练输入，它是你手上关于运行时最可靠的一份规格书。</b>README 可能是错的，训练那个 checkpoint 的人可能已经离职了。但数据集不会在这些事情上撒谎：模型看到了什么、顺序如何、单位是什么、频率多少、从什么起始位姿开始。</p>
   <div class="byline">

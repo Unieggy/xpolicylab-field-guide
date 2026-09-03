@@ -1,7 +1,7 @@
 # XPolicyLab Field Guide
 
-Static GitHub Pages site for the public, sanitized version of the real-robot
-VLA deployment engineering handbook.
+Static GitHub Pages site for the public, sanitized real-robot VLA
+infrastructure guide.
 
 The site intentionally omits hardware serials, private repository locations,
 internal checkpoint identities, and identifiable lab media.

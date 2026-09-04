@@ -355,49 +355,50 @@ figure{margin:40px 0}
 <main id="main-content">
 
 <header class="wide article-head" id="top">
-  <h1>真机部署基础设施实战指南</h1>
+  <h1>真机部署基础设施：一份实用指南</h1>
   <p class="post-meta"><a href="https://github.com/Unieggy">Michael Lai</a><br>2026 年 9 月</p>
 
   <div class="intro">
-    <p>如果你正在读这篇东西，大概率说明机器人系统里最不光鲜、偶尔也最吓人的那一段已经落到你手上了：把 checkpoint 和真正会动的硬件之间那一整条链路接起来。恭喜，也祝你好运。实际出问题的地方通常比架构图写得更小、更怪，也更烦。</p>
+    <p>如果你在读这篇东西，大概率说明机器人技术栈里最难画进架构图、偶尔也最吓人的那一段已经交到你手上了：从 checkpoint 到真正会动的硬件之间的所有环节。恭喜，也祝你好运。实际出的故障通常比架构图上画的更小、更怪，也更让人恼火。</p>
 
-    <p>一个 checkpoint 可以加载得很干净、返回全是有限值的动作，放到真机上却几乎没法用。我们碰到的失败很少是“模型没加载”；更常见的是某一个很小的错位：相机角色、单位、时序假设、初始位姿，或者 recorder 标签。</p>
+    <p>一个 checkpoint 可以正常加载、返回有限值动作，放到真机上却几乎没法用。在我们的部署里，失败很少是“模型没加载出来”。更常见的是一处很小的错位：某个相机角色、某个单位、某个时序假设、某个初始位姿，或者某个 recorder 标签。</p>
 
-    <p>在 GR3、双臂 PiPER X 和 Astribot S1 上折腾了两个月之后，同一个模式反复出现：runtime 在猜，而训练数据其实早就把答案固定下来了。这篇指南记录的是最后形成的流程——先证明原始策略能跑，再测时序、再调 RTC；只针对明确的动作问题加处理；让 DAgger 采集严格复现原始训练合同。</p>
+    <p>在 GR3、双臂 PiPER X 和 Astribot S1 上跨两个月折腾下来，同一个模式反复出现：runtime 在猜那些训练数据早就定死的细节。这篇指南记录的是最终沉淀下来的工作流程——先把原始策略跑通，调 RTC 之前先量时序，针对具体动作伪影选择运动处理，再让 DAgger 采集复现最初的训练契约。</p>
 
-    <p>如果你改了 runtime 的关键部分——新机器人、时序语义、录制格式或安全链路——请在同一个 PR 里把这篇指南一起更新。别让未来的你，或者下一个倒霉的人，靠翻 terminal history 做系统考古。</p>
+    <p>如果你改了 runtime 的关键部分——机器人接入、时序语义、recorder 结构或安全链路——请在同一个 PR 里更新这篇指南。让未来的你，或者下一个接手的人，直接继承证据，而不是靠翻终端记录重新拼出整个系统。</p>
   </div>
 </header>
+
 
 <!-- 1 -->
 <section id="shape">
   <div class="col">
-    <div class="num">01</div>
-    <h2>张量形状一致，不等于运行时合同一致</h2>
+    <div class="num">01 · RUNTIME CONTRACT</div>
+    <h2>张量形状对得上，不等于运行时契约成立</h2>
 
-    <p>这是坑我们次数最多的一种失败。checkpoint 加载成功，restore 干净，你喂给它一份合成观测，它回你一个漂亮的 <code>[32,14]</code> 浮点数组，全是有限值。每一条断言都过了。然后你把它放到机器人上，它做出的动作介于"什么都没做"和"有点吓人"之间。</p>
+    <p>checkpoint 可以正常加载，吃进一份合成观测，吐出一个有限的 <code>[32,14]</code> 张量，然后仍然和这台机器人不兼容。形状校验只能证明内存布局没错。它证明不了含义没错。</p>
 
-    <p>形状永远是对的。这某种意义上就是问题所在——形状本来就不是会出错的那一部分。两个张量可以形状完全一样，却描述两台完全不同的机器人。</p>
+    <p>两个形状完全相同的张量，可能编码着不同的相机角色、字段顺序、单位、时间戳或动作语义。这类错配经常能穿过所有离线断言，直到上了硬件才表现为动作软弱、乱抖或者不安全。</p>
 
-    <p>"三路 RGB 相机加 14 维状态输出 14 维动作"不是合同，那是形状。真正决定这东西能不能跑的问题，全都在形状下面一层：</p>
+    <p>“三路 RGB 相机加 14 维状态，输出 14 维动作”只是接口摘要，不是部署契约。真正可执行的契约必须回答下面这些问题：</p>
 
     <ul>
-      <li>哪一路是<em>左</em>？机器人的左，还是操作员监控画面里的左？</li>
-      <li>RGB 还是 BGR，谁负责转——驱动、graph，还是 adapter？</li>
-      <li>夹爪的单位是米、毫米，还是行程百分比？</li>
-      <li>chunk 的第 0 行是"此刻"，还是"下一个控制 tick"？</li>
-      <li>它见过的到底是哪几条 prompt？不是"关笔记本"，而是 <em>"Close the laptop."</em>——大写 C，带句号。</li>
+      <li>哪一路相机是<em>左</em>？机器人的左，还是操作员监控墙上的左？</li>
+      <li>RGB 还是 BGR，谁来转——驱动、graph，还是 adapter？</li>
+      <li>夹爪单位是米、毫米，还是行程百分比？</li>
+      <li>动作块的第 0 行表示“此刻”，还是“下一个控制 tick”？</li>
+      <li>它训练时看到的到底是哪几条 prompt？不是“关笔记本”，而是 <em>"Close the laptop."</em>——大写 C，带句号。</li>
     </ul>
 
-    <p>这些在形状检查里一个都看不见。而它们每一个都能毁掉你一个下午。</p>
+    <p>只要有一个答案缺失，这个 checkpoint 就没到能上机器人做资格验证的程度。</p>
 
-    <h3>所以现在我们让 checkpoint 自己回答这些问题</h3>
+    <h3>让 checkpoint 自己声明契约</h3>
 
-    <p>我们部署的每个 bundle 都带一份冻结的、机器可读的 <code>contract.json</code>。不是文档——是运行时会去读、并且会强制执行的文件。下面是真实的一份，删了些行：</p>
+    <p>每个可部署的模型包都带一份冻结的、机器可读的 <code>contract.json</code>，运行时负责强制执行。下面这份为了可读性删掉了一些行：</p>
   </div>
 
   <div class="code wide">
-    <span class="f">model-store/models/&lt;policy-family&gt;/&lt;checkpoint&gt;/contract.json</span>
+    <span class="f">model-store/models/&lt;policy&gt;/&lt;deployment&gt;/&lt;checkpoint&gt;/contract.json</span>
 <pre data-lang="json">{
   "observation": {
     "head_rgb":        "uint8[H,W,3] RGB",
@@ -408,7 +409,7 @@ figure{margin:40px 0}
   },
   "action": {
     "representation": "absolute joint/gripper targets after output transform",
-    "units":          "joint radians; gripper width in dataset units",
+    "units":          "joint radians; gripper width in metres",
     "shape":          [32, 14],
     "control_hz":     30,
     "execute_chunk":  16
@@ -423,68 +424,67 @@ figure{margin:40px 0}
   </div>
 
   <div class="col">
-    <p>最后那一段是整个仓库里我最喜欢的东西。bundle 在自己内部声明了它<em>不能</em>证明什么。它挡下来的"过于乐观的周五傍晚"，比任何测试覆盖率都多。</p>
+    <p><code>evidence_scope</code> 这一段很重要：模型包自己记下了这次资格验证能证明什么、还有什么没验证。权重加载成功、合成推理输出有限值，不代表它在真机上能完成任务。</p>
 
-    <h3>那个 14 维向量的排布跟你想的不一样</h3>
+    <h3>字段顺序也是契约的一部分</h3>
 
-    <p>不许看，快速回答：我们双臂 PiPER 的状态是 14 个数，两条 6 自由度手臂各带一个夹爪。它是怎么排的？</p>
-
-    <p>如果你说"12 个手臂关节，然后 2 个夹爪"——一样，大家都这么说。它是错的：</p>
+    <p>双臂 PiPER 的状态里有两条 6 自由度手臂和两个夹爪，但排布不是“12 个手臂关节，后面跟 2 个夹爪”：</p>
   </div>
 
   <div class="code wide">
     <span class="f">real_world/robots/piper_x_dual/mapping.py</span>
 <pre data-lang="py">ACTION_NAMES = (
-    left_joint1 … left_joint6,   left_gripper,     # 索引 0-6
-    right_joint1 … right_joint6, right_gripper,    # 索引 7-13
+    left_joint1 … left_joint6,   left_gripper,     # indices 0-6
+    right_joint1 … right_joint6, right_gripper,    # indices 7-13
 )
 units = ("rad",)*6 + ("m",) + ("rad",)*6 + ("m",)</pre>
   </div>
 
   <div class="col">
-    <p>夹爪是<em>插在中间</em>的，在索引 6 和索引 13。按直觉那种排法去写，右臂每个关节都会错位一格，一个米量级的数落进一个期待弧度的槽里，机器人会做出一个你会记很久的动作。而维度检查全程都是通过的，因为形状仍然是 <code>[14]</code>。</p>
+    <p>夹爪是<em>交错</em>排的，在索引 6 和索引 13。按直觉布局去写，右臂每个关节都会整体错一格，一个以米为单位的数落进本应是弧度的槽里，机器人会做出一个你很久都忘不掉的动作。整个过程维度检查一直通过，因为形状仍然是 <code>[14]</code>。</p>
 
-    <p>所以我们的 schema 带的是 <code>fields</code>、<code>units</code> <em>和</em> <code>semantics</code> 三个并列元组，而不是一个光秃秃的维度；也所以任何东西动起来之前，两端都要先比 <code>schema_id</code>。15 Hz 的 chunk 也不可能被悄悄按 30 Hz 执行——频率是单独检查的，因为这个我们也错过。</p>
+    <p>所以我们的 schema 把 <code>fields</code>、<code>units</code> <em>和</em> <code>semantics</code> 作为三组并列元组来携带，而不是一个光秃秃的维度；也所以任何东西动起来之前，两端都要先比对 <code>schema_id</code>。15 Hz 的动作块也不可能被悄悄按 30 Hz 执行——频率单独检查，因为这个我们也栽过。</p>
 
-    <h3>颜色是最阴的那个</h3>
+    <h3>颜色转换只做一次</h3>
 
-    <p>我们的采集 profile 发布 <code>bgr8</code>，bundle 合同写的是 <code>RGB</code>。必须有人在一个你能指出来的地方，恰好转一次。转两次会互相抵消。一次都不转，模型看到的是一张完全合理、只是颜色不对的世界图像，然后它的行为会变怪——而任何断言都抓不到。</p>
+    <p>我们的采集 profile 发布 <code>bgr8</code>。模型包契约写的是 <code>RGB</code>。必须有人在你能指出的那个位置，恰好把通道换一次。转两次会互相抵消。一次都不转，模型看到的是一张完全合理、只是颜色不对的世界图像，然后它的行为会变得古怪——而没有任何断言能抓住这种错。</p>
 
     <div class="note warn">
-      <span class="lbl">这个我们在软件里根本抓不到</span>
-      <p>我们在 PiPER 上第一次标的左右相机就是错的。两路都健康，两个序列号都钉在 instance profile 里，两个角色都稳定。全绿。软件层面没有任何东西能把它和"正确"区分开。</p>
-      <p>最后是有人站到其中一台相机前面挥手，才发现的。</p>
-      <p>现在验收流程里每台相机都要做一次遮挡核验，因为相机身份是一个<b>物理断言</b>，只有物理测试才能证伪它。在 UI 里把标签换到画面"看起来对"为止，你会得到一个稳定说谎的系统——那严格来说比一个明显在说谎的系统更糟。</p>
+      <span class="lbl">软件替代不了的一项物理检查</span>
+      <p>我们在 PiPER 单元上第一次标左右相机就是错的。两路流都健康，两个序列号都钉在 instance profile 里，两个角色都稳定。全绿。软件层面没有任何东西能把它和“正确”区分开。</p>
+      <p>最后是有个人站到其中一台相机前面挥了挥手，才发现。</p>
+      <p>现在验收流程里每台相机都要做一次遮挡核验，因为相机身份是一个<b>物理断言</b>，只有物理测试能证伪它。在 UI 里把标签换到画面“看起来对”为止，你会得到一个稳定说谎的系统——那比一个明显在说谎的系统更糟。</p>
     </div>
   </div>
 </section>
 
+
 <!-- 2 -->
 <section id="baseline">
   <div class="col">
-    <div class="num">02</div>
-    <h2>先让原始策略真正跑起来</h2>
+    <div class="num">02 · BASELINE</div>
+    <h2>先把裸策略跑起来</h2>
 
-    <p>每一次我们赶时间，都会一口气把整套东西全打开——异步预取、RTC 混合、低通滤波，全部——然后开始研究机器人为什么行为怪异。这从来没有一次让我们更快。</p>
+    <p>不要一上来就把异步预取、RTC 切换和低通滤波同时打开，然后才开始验收。这套配置会掩盖故障到底出在哪一层边界上。</p>
 
-    <p>所以现在的规矩，而且我们相当虔诚地遵守：<b>先让裸策略跑起来，再加别的。</b>原始动作，正确合同，送到机器人。它会有点抖，没关系。一个会抖但动作合理的策略能告诉你巨量信息；一个被层层处理却从来不动的策略，几乎什么都告诉不了你。</p>
+    <p><b>先让裸策略能跑，再加可选的运动处理。</b>一个有点抖但方向正确的策略，是能用的基线。一个被层层处理过却根本不动的策略，没法告诉你问题出在模型、调度器、滤波器、安全门还是硬件通路上。</p>
 
-    <p>"裸"是一份具体配置，不是一种感觉：</p>
+    <p>本手册里，<b>裸基线</b>指这套具体配置：</p>
 
     <ul>
-      <li><code>ACTION_RTC_MODE=disabled</code>——不学预取点，不做混合。</li>
+      <li><code>ACTION_RTC_MODE=disabled</code>——不启用预取，也不做融合。</li>
       <li><code>--no-model-filter</code>——模型关节上不加低通。</li>
-      <li>执行前缀用 descriptor 默认值，32 步 horizon 里的 16 步。是评审过的值，不是一次实验。</li>
-      <li>先 <code>--no-write</code>。影子模式，任何东西都不到 SDK。</li>
+      <li>执行前缀用部署描述文件的默认值：32 行预测中执行前 16 行。这是评审过的值，不是随手试出来的。</li>
+      <li>先加 <code>--no-write</code>。在 shadow 模式下，任何动作都到不了 SDK。</li>
     </ul>
 
-    <p>而永远不会被关掉的是：schema 校验、频率一致、generation 栅栏、新鲜度检查，以及机器人自有的最终门加上有且只有一个进程能调 SDK writer。这些不是"处理"，这是地板。</p>
+    <p><em>永远不会</em>被关掉的是：schema 校验、频率一致性、generation 栅栏、新鲜度检查，以及机器人自有的最终门——有且只有一个进程能调 SDK 写入端。这些不是可选处理，而是系统底线。</p>
 
-    <p>有一个细节我们花了点时间才真正吃透：RTC 关掉的时候，<b>已执行动作对齐仍然在跑。</b>它是强制的，不是 RTC 的特性。上一个 episode 的迟到 chunk 照样会被丢弃，返回结果照样会按在途期间消费掉的动作数做对齐。为什么，马上说。</p>
+    <p>有个细节我们花了很久才真正吃透：RTC 关掉时，<b>按已执行动作做时间对齐仍然在跑。</b>它是强制的，不是 RTC 的功能。上一个 episode 迟到的动作块照样会被丢弃，返回结果照样会按它在途期间消费掉的动作数对齐。原因马上讲。</p>
 
-    <h3>我们实际上看什么</h3>
+    <h3>测量裸动作的动态范围</h3>
 
-    <p>不是"动作看着顺不顺"。我们算 chunk 里每一步的最大绝对关节变化，然后把它的<em>分布</em>和原始训练 episode 的逐关节速度分位数比较。</p>
+    <p>不是看“动作顺不顺”。我们算动作块里每一步的最大绝对关节变化，再把这个<em>分布</em>和原始训练 episode 里逐关节速度分位数做比较。</p>
   </div>
 
   <div class="eq wide">
@@ -501,60 +501,61 @@ units = ("rad",)*6 + ("m",) + ("rad",)*6 + ("m",)</pre>
     </math>
     <dl class="terms">
       <div><dt>δ</dt><dd>策略在一个控制步里想移动多远</dd></div>
-      <div><dt>a<sub>t,j</sub></dt><dd>chunk 第 <b>t</b> 行、第 <b>j</b> 个关节的指令目标</dd></div>
+      <div><dt>a<sub>t,j</sub></dt><dd>动作块第 <b>t</b> 行、关节 <b>j</b> 的指令目标</dd></div>
       <div><dt>max<sub>j</sub></dt><dd>对全部 14 个字段取最大，单个坏关节藏不住</dd></div>
-      <div><dt>t</dt><dd>chunk 内部的行索引，不是墙钟时间</dd></div>
+      <div><dt>t</dt><dd>动作块内部的行索引，不是墙钟时间</dd></div>
     </dl>
   </div>
 
   <div class="col">
-    <p>这一个数就能把三种在机器人上感觉完全一样的失败区分开。<b>太小</b>：模型太保守，或者它的纠正数据采得很慢（见 §6）。<b>太大</b>：安全层马上要把大部分限掉，机器人会显得又闷又跟不上。<b>不连续</b>：接缝、单位错误，或者策略确实进了不稳定区域。</p>
+    <p>这一个数就能把三种在机器人上感觉完全一样的故障分开。<b>太小</b>：模型太保守，或者它的纠正数据采得太慢（§6）。<b>太大</b>：安全层马上要把大部分限掉，机器人会显得发闷、跟不上。<b>不连续</b>：有接缝、单位错误，或者策略确实进了不稳定区域。</p>
 
-    <p>两个真实数字用来校准。GR3 上一个"感觉发钝"的 checkpoint，中位最大关节步长是 <b>0.041 rad</b>，而大家都喜欢的那个是 <b>0.064 rad</b>——小了 37%，推理延迟完全一样。另一次运行里，原始步长冲到 <b>1.13–1.19 rad</b>，撞上 <b>0.10 rad/step</b> 的限幅，<b>单个 chunk 里最多裁掉 97 个值</b>。</p>
+    <p>两个真实数字用来校准。GR3 上一个“感觉发钝”的 checkpoint，中位最大关节步长是 <b>0.041 rad</b>；大家都觉得正常的那个是 <b>0.064 rad</b>——小了 37%，推理延迟完全一样。另一次运行里，原始步长冲到 <b>1.13–1.19 rad</b>，撞上 <b>0.10 rad/step</b> 的限幅，<b>单个动作块里最多裁掉 97 个值</b>。</p>
 
-    <p>这两件事报到我们这儿都是"机器人变慢了"。成因相反，修法也相反。</p>
+    <p>这两件事报到我们这儿都是“机器人变慢了”。成因相反，修法也相反。</p>
   </div>
 </section>
+
 
 <!-- 3 -->
 <section id="sluggish">
   <div class="col">
-    <div class="num">03</div>
-    <h2>时序问题看起来往往像动作问题</h2>
+    <div class="num">03 · TIMING AND RTC</div>
+    <h2>时序故障看起来往往像动作很差</h2>
 
-    <p>这是我们手上最好的一个调试故事，因为所有凭直觉给出的答案都是错的，包括我自己的。</p>
+    <p>“发闷”只是一个视觉症状。它可能意味着模型步长偏小、队列饿死、轨迹被反复替换、安全限幅、观测过期，或者真的推理变慢。每种原因对应的处理方式都不一样。</p>
 
-    <p>8 月 12 日，GR3，pick-doll 任务。checkpoint 跟前一天是同一系列，但机器人明显更差了——犹豫、停顿，那种一卡一卡的动法，会让房间里所有人立刻假设有什么东西过热了。</p>
+    <p>8 月 12 日 GR3 的 pick-doll 运行是个有用的例子。checkpoint 系列没换，但动作变得犹豫，在停顿和短促爆发之间来回切换。</p>
 
-    <p>那些显而易见的假设，以及日志实际上说了什么：</p>
+    <p>最先怀疑的硬件和算力方向，和日志对不上：</p>
 
     <ul>
-      <li><b>推理变慢了？</b>73 ms。和那次感觉超好的运行一模一样。</li>
-      <li><b>工作站在抖？</b>内存还剩 102 GiB。</li>
-      <li><b>GPU 在烧？</b>36 °C。</li>
+      <li><b>推理变慢了？</b>73 ms。和那次手感很好的运行一样。</li>
+      <li><b>工作站内存吃紧？</b>还有 102 GiB 空闲内存。</li>
+      <li><b>GPU 过热？</b>36 °C。</li>
       <li><b>电机过热？</b>机器人计算机约 20 °C，控制器日志里没有任何过温、过流或电机故障条目。</li>
-      <li><b>是不是哪个缓存满了？</b>我们清掉了 7.6 GB 的包缓存。毫无变化，跟预期完全一致，但我们还是觉得有义务试一下。</li>
+      <li><b>存储或缓存压力？</b>清掉 7.6 GB 包缓存，没有变化。</li>
     </ul>
 
-    <p>所以机器是好的。问题是我们。</p>
+    <p>工作站和机器人控制器都是健康的。故障出在调度和动作准入上。</p>
 
-    <h3>实际发生的事</h3>
+    <h3>实际观察到的原因</h3>
 
-    <p>三件事叠在一起，按责任从大到小。</p>
+    <p>三件事叠在一起，按责任从大到小排。</p>
 
-    <p><b>一：启动命令覆盖了 <code>RTC_TRIGGER_STEPS=24</code>，而通过资格验证的值是 22。</b>听起来像没差别。不是。在 30 行的对齐队列下，trigger 24 意味着只执行 <b>6–8 行</b>就重规划——大约 0.2–0.27 秒——而其中 4 行还在做混合。所以<b>每个更新间隔大约三分之二的时间都待在过渡里</b>。机器人一直在改主意，然后又把自己平均掉。</p>
+    <p><b>第一：启动命令覆盖了 <code>RTC_TRIGGER_STEPS=24</code>，而通过资格验证的值是 22。</b>在 30 行的对齐队列下，trigger 24 意味着只执行 <b>6–8 行</b>就重规划——大约 0.2–0.27 秒——其中 4 行还在做融合。也就是说，<b>每个更新间隔大约三分之二的时间都处在过渡里</b>。</p>
 
-    <p><b>二：rollout 中途，checkpoint 提出了一个 0.623 rad 的右手食指接缝</b>，而准入上限是 0.56 rad。这个 chunk 被拒绝了，拒得没错。但队列随后<b>连续四个 chunk</b>失去了尾部——真正的饥饿。这就是操作员感受到的"停—动—停"。</p>
+    <p><b>第二：rollout 中途，checkpoint 提出了一个 0.623 rad 的右手食指接缝</b>，而准入上限是 0.56 rad。这个动作块被拒了，队列随后<b>连续四次</b>没有拿到新的尾部。这段饥饿造成了操作员看到的“停—动—停”动作。</p>
 
-    <p><b>三：被拒之后，原始模型步长冲到 1.13–1.19 rad。</b>安全层把它们限到 0.10 rad/step，单个 chunk 最多限了 <b>97 个值</b>。大量限幅在人眼看来，就是标准的"发闷、发钝"。</p>
+    <p><b>第三：被拒之后，原始模型步长冲到 1.13–1.19 rad。</b>安全层把它们限到 0.10 rad/step，单个动作块最多限了 <b>97 个值</b>。大量限幅在人眼看来，就是标准的“阻尼过重、发闷”。</p>
 
-    <p>这里面没有一件是硬件问题，而且如果没有每个被接受的 chunk 都会发布的对齐证据——实测延迟、对齐偏移、队列深度、过渡前后的接缝大小——这些一件都查不出来。</p>
+    <p>这些没有一个是硬件问题。要定位它们，运行时必须为每个被接受的动作块发布完整的时序证据：实测延迟、对齐偏移、队列深度，以及过渡前后的接缝大小。</p>
 
-    <h3>为什么对齐这件事重要</h3>
+    <h3>经过时间对齐是强制项</h3>
 
-    <p>算一点小学算术，整件事就明显了。30 Hz 下一个控制步是 33.3 ms。32 行 horizon 是 1.07 秒的计划。GR3 上实测的 Pi0.5 推理是 70–75 ms——就算 <b>2–3 个控制步</b>。</p>
+    <p>30 Hz 下，一个控制步是 33.3 ms。模型可能预测 32 行（1.07 s），而部署端只把验证过的 16 行执行前缀（0.53 s）放进队列。RTC 操作的是这个<b>有效执行队列</b>，不是运行时已经删掉的行。实测 70–75 ms 的推理大约吃掉 <b>2–3 个控制步</b>。</p>
 
-    <p>所以如果推理阻塞控制环，机器人会在两个 chunk 之间停 2–3 个 tick，你能听出来。如果推理是异步的、但回复从第 0 行开始安装，你就会重放 2–3 个"时刻已经过去"的动作，机器人会先往回窜一下再往前走。异步推理解决第一个问题。对齐解决第二个，所以它不是可选项。</p>
+    <p>所以如果推理阻塞控制环，机器人会在动作块之间停 2–3 个 tick，你能听出来。如果推理异步跑、但回复从第 0 行开始安装，你就会重放 2–3 个“时刻已经过去”的动作，机器人会先往后窜一下再往前走。异步推理解决第一个问题。时间对齐解决第二个，所以它不是可选项。</p>
   </div>
 
   <div class="eq wide">
@@ -567,7 +568,7 @@ units = ("rad",)*6 + ("m",) + ("rad",)*6 + ("m",)</pre>
         <mo>+</mo>
         <munder><munder accentunder="true">
           <mrow><mo>⌈</mo><mfrac><mrow><mi>Δ</mi><msub><mi>t</mi><mtext>obs</mtext></msub><mo>·</mo><mi>f</mi></mrow><msup><mn>10</mn><mn>9</mn></msup></mfrac><mo>⌉</mo></mrow>
-          <mo>⏟</mo></munder><mtext>观测已过期</mtext></munder>
+          <mo>⏟</mo></munder><mtext>观测年龄</mtext></munder>
       </mrow>
     </math>
     <dl class="terms">
@@ -583,92 +584,101 @@ units = ("rad",)*6 + ("m",) + ("rad",)*6 + ("m",)</pre>
   <div class="col">
     <p><b>c &lt; T</b> 才接受，然后执行第 c…T−1 行。否则整个回复都过期了：立刻丢弃并重新请求，而不是等下一次自然触发。</p>
 
-    <p>而<em>什么时候</em>去要下一个 chunk，来自实测延迟，不是来自某个人看着顺眼的数：</p>
+    <p>而<em>什么时候</em>去要下一个动作块，来自实测延迟，不是来自某个人看着顺眼的数：</p>
   </div>
 
   <div class="eq wide">
     <math display="block">
       <mrow>
         <msub><mi>n</mi><mtext>trigger</mtext></msub><mo>=</mo>
-        <mo movablelimits="false">min</mo><mo>(</mo><mi>H</mi><mo>−</mo><mn>1</mn><mo>,</mo>
+        <mo movablelimits="false">min</mo><mo>(</mo><mi>E</mi><mo>−</mo><mn>1</mn><mo>,</mo>
         <mspace width="0.3em"/>
         <msub><mi>q</mi><mrow><mn>0.95</mn></mrow></msub><mo>+</mo><mi>m</mi>
         <mo>+</mo>
         <munder><munder accentunder="true">
           <mrow><mo>(</mo><mi>p</mi><mo>+</mo><mi>τ</mi><mo>)</mo></mrow><mo>⏟</mo></munder>
-          <mtext>仅 blend</mtext></munder>
+          <mtext>仅融合</mtext></munder>
         <mo>)</mo>
       </mrow>
     </math>
     <dl class="terms">
       <div><dt>n<sub>trigger</sub></dt><dd>队列剩到这个深度就发下一次请求</dd></div>
-      <div><dt>H</dt><dd>模型 horizon 的行数</dd></div>
+      <div><dt>E</dt><dd>模型输出截断后的有效执行前缀</dd></div>
       <div><dt>q<sub>0.95</sub></dt><dd>最近 32 次回复的<b>实测</b>往返延迟 95 分位</dd></div>
       <div><dt>m</dt><dd>设计余量——默认 1 步</dd></div>
       <div><dt>p</dt><dd><b>preserve</b> 步数——我们选的，不是测出来的</dd></div>
-      <div><dt>τ</dt><dd><b>transition</b> 步数——只在 blend 模式下计入</dd></div>
+      <div><dt>τ</dt><dd><b>transition</b> 步数——只在融合模式下计入</dd></div>
     </dl>
   </div>
 
   <div class="col">
-    <p>值得刻进脑子里的区别：<b><i>q</i> 是我们测出来的，<i>p</i> 和 <i>τ</i> 是我们定的。</b><code>preserve = 2</code> 不代表"GPU 花了两步"，它代表运行时决定在替换到达之后，再多信任两行对齐过的旧目标。把这两者混起来，你就会开始凭手感调延迟预算——8 月 12 日大致就是这么回事。</p>
+    <p><b><i>q</i> 是测出来的；<i>p</i> 和 <i>τ</i> 是策略选择。</b><code>preserve = 2</code> 不代表 GPU 花了两步。它代表运行时在替换到达之后，故意保留两行对齐过的旧队列目标。当前 PiPER 操作员界面把 preserve 固定为 <code>0</code>，只暴露 transition 长度；共享运行时仍把 preserve 作为高级运行时契约字段。</p>
+
+    <div class="definition-grid" aria-label="RTC 字段定义">
+      <div><code>Execution prefix</code><b>允许执行的行</b><span>32 行的模型输出可以在调度前截断为 16 行队列。</span></div>
+      <div><code>Auto latency</code><b>何时请求</b><span>用实测延迟分位数加余量；融合模式还要预留 transition 行。</span></div>
+      <div><code>No blend</code><b>对齐后替换</b><span>预取保持开启。过期的替换行被丢弃，但旧目标和新目标不做平均。</span></div>
+      <div><code>Preserve</code><b>保留旧行</b><span>回复到达并完成时间对齐后，故意保留这么多仍然有效的旧目标。</span></div>
+      <div><code>Transition</code><b>融合后续行</b><span>用选定的权重曲线混合接下来对齐过的旧目标和新目标。</span></div>
+    </div>
 
     <p>下面是完整的一个周期。拖滑块——有意思的地方是看哪些行换了主人。</p>
   </div>
 
-  <figure class="wide" id="rtcfig">
-    <figcaption><b>一个 RTC 周期，按"这一行归谁"上色。</b>每个格子是一个控制步。上面一条是正在执行的计划，下面一条是替换计划，已经画成对齐之后的位置。</figcaption>
+  <figure class="wide diagram" id="rtcfig">
+    <figcaption><b>一个 RTC 周期，按“这一行归谁”上色。</b>每个格子是一个控制步。上面一条是正在执行的计划，下面一条是替换计划，已经画成对齐之后的位置。<span class="scroll-hint">横向滚动图表 →</span></figcaption>
     <div class="controls">
-      <label><span class="cap">模式</span><select id="rtcMode"><option value="align">align</option><option value="blend" selected>blend</option></select></label>
-      <label><span class="cap">Horizon H<b id="vH">32</b></span><input id="rH" type="range" min="12" max="48" step="4" value="32"></label>
+      <label><span class="cap">模式</span><select id="rtcMode"><option value="align">对齐 / 不融合</option><option value="blend" selected>融合</option></select></label>
+      <label><span class="cap">执行前缀 E<b id="vH">16</b></span><input id="rH" type="range" min="8" max="32" step="4" value="16"></label>
       <label><span class="cap">控制频率 Hz<b id="vF">30</b></span><input id="rF" type="range" min="10" max="60" step="5" value="30"></label>
       <label><span class="cap">推理延迟 ms<b id="vL">73</b></span><input id="rL" type="range" min="20" max="240" step="1" value="73"></label>
-      <label><span class="cap">Preserve<b id="vP">2</b></span><input id="rP" type="range" min="0" max="8" value="2"></label>
+      <label><span class="cap">Preserve（高级）<b id="vP">0</b></span><input id="rP" type="range" min="0" max="8" value="0"></label>
       <label><span class="cap">Transition<b id="vT">4</b></span><input id="rT" type="range" min="0" max="8" value="4"></label>
     </div>
-    <svg id="rtcSvg" viewBox="0 0 900 250" role="img" aria-label="RTC 时序图"></svg>
+    <div class="diagram-canvas"><svg id="rtcSvg" viewBox="0 0 900 270" role="img" aria-label="RTC 时序图"></svg></div>
     <div class="legend" id="rtcLegend"></div>
     <div class="readout" id="rtcOut"></div>
   </figure>
 
   <div class="col">
     <div class="note blue">
-      <span class="lbl">我们的 RTC 不是什么</span>
-      <p>客户端 RTC 对<em>已经完成</em>的 action chunk 做对齐，以及可选的混合。就这些。previous-action 条件、冻结扩散步、梯度 guidance——那些是模型后端的能力，打开预取一个都不附送。</p>
-      <p>它们也可以被训练进去；我们 store 里就有一个 bundle 直接叫 <code>…-trainrtc-d0to6-v1</code>。那是那份权重的性质，和 <code>real_world/rtc.py</code> 做的事仍然是第三件独立的事。我们见过这三样在同一场对话里都被叫做"RTC"。</p>
+      <span class="lbl">RTC 术语</span>
+      <p>客户端 RTC 对<em>已经返回</em>的动作块做经过时间对齐，并可选地融合接缝。就这些。previous-action 条件、冻结扩散步和梯度引导是模型后端的能力，打开预取并不会自动获得这些能力。</p>
+      <p>它们也可以被训练进去；我们 store 里就有一个模型包直接叫 <code>…-trainrtc-d0to6-v1</code>。那是那份权重的性质，和 <code>real_world/rtc.py</code> 做的事仍然是第三件独立的事。我们见过这三样在同一场对话里都被叫做“RTC”。</p>
     </div>
   </div>
 </section>
 
+
 <!-- 4 -->
 <section id="smooth">
   <div class="col">
-    <div class="num">04</div>
+    <div class="num">04 · MOTION CONDITIONING</div>
     <h2>平滑不是一种单一操作</h2>
 
-    <p>上面那个故事里，真正让我意外的是这部分。</p>
+    <p>平滑不是单一操作。动作块过渡、低通滤波、样条插值和速率限制，各自对应不同的失效模式，也各自位于控制链路的不同位置。</p>
 
-    <p>我们拿它跟 DAgger-GR3——上一代的 stack——做了对比，而所有人都同意后者<em>感觉</em>更顺。它做的平滑更少，少很多。它会完整执行一整个连贯的 chunk，大约 1–1.7 秒的同一份计划，然后才去要下一个。而且它允许每个在线关节步 0.15 rad，我们是 0.10。</p>
+    <p>我们拿它跟上一代 DAgger-GR3 做了对比，所有人都同意后者<em>感觉</em>更顺。它做的平滑更少，少很多。它会完整执行一整个连贯的动作块——大约 1–1.7 秒的同一份计划——然后才去请求下一个。而且它允许每个在线关节步 0.15 rad，我们这套只允许 0.10。</p>
 
-    <p>所以更新的、滤波更多、限制更紧的这套，看起来更差。</p>
+    <p>所以更新的这套，滤波更多、限制更紧，看起来反而更差。</p>
 
-    <p>说出口之后我觉得这不算什么悖论，但我们花了挺丢人的一段时间才把它说出口：<b>一套更频繁替换轨迹、然后又把自己追赶的尝试裁掉的系统，会比一套干脆认准一份计划的系统看起来更不平滑。</b>每一次重规划都是一次跟自己意见不合的机会。每一次裁剪都是机器人离它正在追的目标又远了一点。</p>
+    <p><b>一套更频繁替换轨迹、又把自己追赶动作裁掉的系统，会比一套认准一份连贯计划的系统看起来更不平滑。</b>每一次重规划都引入一条新边界；每一次裁剪都增加跟踪滞后。</p>
 
-    <p>我们当时建议的下一步不是"放松安全上限"，而是 <code>RTC_TRIGGER_STEPS=16</code>——让相邻两次接受之间执行约 14 行连贯动作而不是 6 行——所有限制原封不动。</p>
+    <p>我们当时建议的修法不是“放松安全上限”，而是 <code>RTC_TRIGGER_STEPS=16</code>——让相邻两次被接受的计划之间执行约 14 行连贯动作，而不是 6 行——所有限制原封不动。</p>
 
-    <h3>我们真正在跑的处理器有哪些</h3>
+    <h3>通过资格验证的运行时里实际启用的处理器</h3>
 
-    <p>这里我想诚实一点，因为很多讲 VLA 部署的文章会把所有轨迹技巧都列出来，好像它们全都在用。在我们一个通过资格验证的部署里，真正开着的只有三样：</p>
+    <p>在通过资格验证的配置里，真正开着的运动处理机制只有三个：</p>
 
     <ul>
-      <li><b>模型关节上的一阶低通。</b>双臂 PiPER 默认开，α = 0.6。</li>
-      <li><b>RTC 对齐</b>，以及可选的有界混合。GR3 和 Astribot 用 align；blend 需要显式打开。</li>
-      <li><b>五次最小 jerk 分段轨迹</b>，用于 Prepare、Home 和数据集位姿过渡。</li>
+      <li><b>模型关节上的一阶低通。</b>双臂 PiPER 默认开启，α = 0.6。</li>
+      <li><b>RTC 时间对齐</b>，以及可选的有界接缝融合。GR3 和 Astribot 用对齐；融合需要显式打开。</li>
+      <li><b>五次多项式 minimum-jerk 分段轨迹</b>，用于 Prepare、Home 和数据集位姿过渡。</li>
     </ul>
 
-    <p>PCHIP 重采样和 chunk QP 在 <code>real_world/output.py</code> 里都有实现。两个都默认关闭，GR3 提交的默认值就是 <code>GR3_CHUNK_SMOOTHING=off</code>，我们从来没有把它们中的任何一个验证到硬件上。我提这两个主要是为了：你读那个文件的时候，别以为它们在承重。</p>
+    <p>PCHIP 重采样和动作块 QP 在 <code>real_world/output.py</code> 里都有实现。两个都默认关闭，GR3 提交的默认值就是 <code>GR3_CHUNK_SMOOTHING=off</code>，我们从来没有把其中任何一个验证到硬件上。这里提到它们，只是为了避免读代码时误以为它们已经启用。</p>
 
-    <h3>低通，以及所有人都会搞错的那部分</h3>
+    <h3>低通行为与滤波器状态</h3>
   </div>
 
   <div class="eq wide">
@@ -694,97 +704,99 @@ units = ("rad",)*6 + ("m",) + ("rad",)*6 + ("m",)</pre>
   </div>
 
   <div class="col">
-    <p>这个滤波器是<em>有状态</em>的，而这个状态就是全部故事。如果目标停在 1.0、输出读数是 0.5，那不是"目标被削小了"——后续更新会继续收敛到 1.0。理论上没问题。但在有限长的 action chunk 上，重规划通常在收敛之前就到了，所以真实行为更接近"永远只走到 60%"。这不是任何人想要的。</p>
+    <p>这个滤波器是<em>有状态</em>的，而这个状态就是全部故事。如果目标停在 1.0、输出读数是 0.5，那不是“目标被削小了”——后续更新会继续收敛到 1.0。理论上没问题。但在有限长的动作块上，重规划通常在收敛之前就到了，所以真实行为更接近“永远只走到 60%”。这不是任何人想要的。</p>
 
     <p>四个接线细节，每一个都是我们弄坏之后学到的：</p>
 
     <ul>
       <li>它在 RTC 协调<b>之后</b>跑，只作用于模型关节。</li>
       <li>在 Start、接管、HOLD、反馈失败或 generation 变化之后的第一步，它用<b>新鲜的实测关节</b>重新初始化。</li>
-      <li>普通的 chunk 替换<b>不会</b>重置它。在那里重置，等于把这个滤波器本来要抹平的接缝又放回去。</li>
+      <li>普通的动作块替换<b>不会</b>重置它。在那里重置，等于把这个滤波器本来要抹平的接缝又放回去。</li>
       <li>专家动作和<b>两个夹爪宽度完全绕过它</b>。夹爪上的相位滞后会错过抓取时机，没有任何 α 能修好这件事。</li>
     </ul>
 
-    <p>未滤波的目标先过一次检查，滤波后的目标在 owner 写 SDK 之前再过一次最终安全门。滤波不是绕过那道门的方式。</p>
+    <p>未滤波的目标先过一次检查，滤波后的目标在硬件控制进程写 SDK 之前再过一次最终安全门。滤波不是绕过那道门的方式。</p>
   </div>
 </section>
+
 
 <!-- 5 -->
 <section id="pose">
   <div class="col">
-    <div class="num">05</div>
+    <div class="num">05 · INITIAL STATE</div>
     <h2>初始位姿属于数据分布</h2>
 
-    <p>同一周，另一个谜。我们注意到 GR3 在 episode 开始时两条手臂不齐——正运动学算出来，左手比右手<b>前伸约 24 mm</b>，左手食指尖<b>高约 8 mm</b>。有点丑。显然值得修。</p>
+    <p>几何上整齐的位姿，不一定是策略能用的起始状态。在 GR3 上，正运动学显示左手比右手<b>前伸约 24 mm</b>，左手食指尖<b>高约 8 mm</b>，于是团队做了一个更对称的初始化。</p>
 
-    <p>于是初始化 profile 从 <code>…start-v5-claude-elbows</code> 换成了 <code>…start-v6-bilateral-fk</code>，把两条手臂对称化，若干关节最多移动 <b>0.084 rad（4.8°）</b>。</p>
+    <p>初始化 profile 从 <code>…start-v5-claude-elbows</code> 换成了 <code>…start-v6-bilateral-fk</code>，把双臂对称化，若干关节最多移动 <b>0.084 rad（4.8°）</b>。</p>
 
     <p>几何变好了。行为变差了。</p>
 
-    <p>原因，在我们停止盯着机器人看、回去看数据之后：<b>v6 是一个算出来的位姿。</b>它是一个双臂 FK 解。它不是训练 episode 里任何一帧。所以 checkpoint 拿到的第一帧观测，是一个它从没见过的轮廓——任务还没开始，它就已经在解一个分布外问题了。它把这个表现成了犹豫，而我们花了一阵子去怪延迟。</p>
+    <p>原因在数据集里一眼就能看到：<b>v6 是一个算出来的双臂 FK 位姿，不是训练 episode 里的任何一帧。</b>于是 checkpoint 第一帧观测就拿到一个分布外的轮廓。它表现成犹豫，一开始看起来像时间对齐问题。</p>
 
-    <p>可以推广的那一条，是我最希望别人带走的，因为它同时也否掉了一个听起来很聪明的方案：<b>逐关节取中位数有完全相同的缺陷。</b>每个关节的值单看都很典型。组合起来却可能是一个在零个 episode 里出现过的身体构型。一个用健康零件拼出来的缝合怪。</p>
+    <p><b>逐关节取中位数有同样的缺陷。</b>每个关节值单看都可能很典型，但组合起来的身体构型在零个 episode 里出现过。要选完整的已记录状态，不要用边缘统计拼出来的合成组合。</p>
 
-    <h3>改成从数据里取位姿</h3>
+    <h3>从已记录的起始帧里选完整位姿</h3>
 
-    <p>我们现在在 PiPER 上的做法是挑真实录下来的帧——每条 prompt 12 个 follower-state medoid，取自真实的训练候选 episode。筛选规则很挑剔，而每一条都是因为放松过之后出过坏位姿：</p>
+    <p>PiPER 运行时改选完整的已记录帧：每条 prompt 十二个 follower-state medoid，取自训练候选 episode。每个候选必须满足：</p>
 
     <ul>
-      <li>锚点取在检测到的持续关节运动起始<b>之前 8 帧（30 Hz 下约 267 ms）</b>——示范者即将发力的那一刻。</li>
-      <li>严格限制在 episode 的<b>前 22%</b>。绝不取中段，绝不取尾部。</li>
-      <li>后面至少还有 <b>120 帧</b>且有显著的后续运动，保证这是一个真正的"开始"而不是一次停顿。</li>
+      <li>锚定在检测到的持续关节运动起始<b>之前 8 帧（30 Hz 下约 267 ms）</b>——示范者即将发力的前一刻。</li>
+      <li>严格落在 episode 的<b>前 22%</b> 内。绝不取中段，绝不取尾部。</li>
+      <li>后面至少还有 <b>120 帧</b>且存在显著的后续运动，保证它是真正的开始，不是一次停顿。</li>
       <li>远离任何终止状态。终止帧和完成后的帧被 schema 直接禁止。</li>
-      <li>库里没有覆盖的 prompt 直接 <b>fail closed</b>，而不是退化成某个通用 home 位姿。</li>
+      <li>库里没有对应条目的 prompt <b>fail closed</b>，不退化成某个通用 home 位姿。</li>
     </ul>
 
-    <p>运行时，唯一的硬件 owner 只接受来自 SHA-256 绑定库的 pose <em>id</em>，然后自己独立重新推导关节限位和最大位移，才会执行任何东西。UI 从不发裸的 12 维目标。如果当前位置无法直达候选，owner 会经由声明的 clear/home 位姿拆成两段有界轨迹，每段下发前检查插值法兰高度——如果这条有界路径仍然不安全，它就 fail closed，而不是去开某个门。</p>
+    <p>运行时，唯一的硬件控制进程只接受来自 SHA-256 绑定库的 pose <em>id</em>，然后独立重新推导关节限位和最大位移，之后才会执行任何动作。UI 从不发裸的 12 维目标。如果当前位置无法直达候选，硬件控制进程会经由声明的 clear/home 位姿拆成两段有界轨迹，每段下发前检查插值法兰高度——如果这条有界路径仍然不安全，它 fail closed，而不是去开某个门。</p>
 
     <div class="note">
-      <span class="lbl">诚实地说这件事买到了什么</span>
-      <p>我们现有的示范几乎都从同一个地方开始。所以这些 medoid 是真实的<em>早期 episode 变体</em>——它们不是一个多样化的起始分布，我也不想过度包装它。真正的起点多样性意味着去采 varied-start 示范。再聪明的筛选规则，也造不出从未被记录过的覆盖。</p>
+      <span class="lbl">当前限制</span>
+      <p>现有示范几乎都共享同一个起始区域。这些 medoid 是有效的<em>早期 episode 变体</em>，不能证明起始分布有多样性。真正的覆盖需要从不同起始位置采集示范。</p>
     </div>
   </div>
 </section>
 
+
 <!-- 6 -->
 <section id="dagger">
   <div class="col">
-    <div class="num">06</div>
+    <div class="num">06 · DAGGER / HITL DATA</div>
     <h2>为什么 DAgger 数据也可能让策略变差</h2>
 
-    <p>这一个的起点是机器人领域最让人泄气的一句话：<em>"拿这份 DAgger 数据微调，效果反而更差。"</em></p>
+    <p>DAgger 数据只有在观测、动作、时间语义和标注语义都与将要消费它的策略一致时才有用。一次成功的专家接管，在这些契约漂移之后，照样能产出有害的训练数据。</p>
 
-    <p>我们去找那个 bug。没有那个 bug。有六个，而且它们会叠加。</p>
+    <p>早期的 GR3 recorder 里，六个互相独立的问题叠加在一起，把微调效果越搞越差：</p>
 
-    <p>这些都在更早的 GR3 recorder 里，现在已经修掉了。我还是把它们列出来，因为这些失败的<em>形状</em>会在每一次新采集里重现，而且六个里有四个，你不主动去找就根本看不见。</p>
+    <p>这些故障属于旧版 GR3 recorder，现在已经修掉了。它们的失效模式仍然值得记下来，因为六个里有四个，不做显式的数据审计就根本看不见。</p>
 
     <ol>
-      <li><b>后续的纠正被悄悄丢掉。</b>recorder 在每次 save 或 discard 之后清空自己的 <code>episode_index</code>，而没有 index 就拒绝开始录——但控制器只在模型 episode 开始时发一次 index。所以一个 episode 里第一次接管录得好好的，第二次没有。我们的数据集被系统性地偏向"第一次纠正"，而那通常是最没意思的一次。</li>
-      <li><b><code>label.valid</code> 被污染。</b>重复的接管状态消息会发出一个 <code>label_valid=false</code> 的默认决策。原始采集里：<b>88,825 个 false</b> 对 <b>77,354 个 true</b>，约 <b>20%</b> 的对齐专家动作，最近的 validity 样本是 false。我们的严格转换器没有天真地消费那条流，所以 bundle 幸免了——但任何按最近时间戳 join 的东西都会把这个错误整个继承下来。</li>
-      <li><b>"成功"只表示操作员按了 save。</b>不表示玩偶最后落在了任何特定的地方。</li>
+      <li><b>后续的纠正被悄悄丢掉。</b>recorder 在每次 save 或 discard 之后清空自己的 <code>episode_index</code>，没有 index 就拒绝开始录——但控制器只在模型 episode 开始时发一次 index。所以一个 episode 里第一次接管录得好好的，第二次没有。我们的数据集被系统性地偏向“第一次纠正”，而那通常是最没意思的一次。</li>
+      <li><b><code>label.valid</code> 被污染。</b>重复的接管状态消息会发出一个 <code>label_valid=false</code> 的默认决策。原始采集里：<b>88,825 个 false</b> 对 <b>77,354 个 true</b>，约 <b>20%</b> 的对齐专家动作，最近的 validity 样本是 false。我们的严格转换器没有天真地消费那条流，所以模型包幸免了——但任何按最近时间戳 join 的东西都会把这个错误整个继承下来。</li>
+      <li><b>“成功”只表示操作员按了 save。</b>不表示玩偶最后落在了任何特定的地方。</li>
       <li><b>我们只录了接管片段。</b>没有紧邻其前的模型失败，也没有其后完成的恢复。孤立的纠正，任务上下文被切掉了。</li>
-      <li><b>数据配比严重过采样了纠正。</b>新 DAgger 数据占每个 batch <b>64 中的 28——43.75%</b>——而到 step 4000 时每个片段大约被看了 <b>8.3 次</b>。短促而显眼的纠正动作，会盖掉父模型原本已经具备的长程成功行为。</li>
+      <li><b>数据配比严重过采样了纠正。</b>新 DAgger 数据占每个 batch <b>64 中的 28——43.75%</b>——到 step 4000 时每个片段大约被看了 <b>8.3 次</b>。短促而显眼的纠正动作，会盖掉父模型原本已经具备的长程成功行为。</li>
       <li><b>六段录制里，安全限幅过的动作配着未裁剪的标签。</b>在严格重建里被隔离了。</li>
     </ol>
 
-    <p>给个量级：严格数据集最后是 <b>22,996 帧 / 13,448 条有效 H32 query</b>。后来的 hybrid bundle 报告 <b>211 个 DAgger 片段、22,742 帧、16,201 条有效 query</b>，配比大约 40% DAgger / 60% replay。</p>
+    <p>给个量级：严格数据集最后是 <b>22,996 帧 / 13,448 条有效 H32 query</b>。后来的混合模型包报告 <b>211 个 DAgger 片段、22,742 帧、16,201 条有效 query</b>，配比大约 40% DAgger / 60% replay。</p>
 
-    <h3>能修掉大部分问题的那件事：按控制 tick join</h3>
+    <h3>按控制 tick join 流</h3>
 
-    <p>相机跑 30 Hz。硬件控制器跑 60、100 或 200。GR3 上我们测到机器人状态 ≈30.29 Hz，专家动作 ≈99.88 Hz，对齐通常在 5 ms 以内。这些是很漂亮的数字。它们仍然不足以支撑按最近时间戳 join，因为"最近"可能悄悄跨过一个接管边界，或者取到错误的 validity 心跳。</p>
+    <p>相机跑 30 Hz。硬件控制器跑 60、100 或 200。GR3 上我们测到机器人状态 ≈30.29 Hz，专家动作 ≈99.88 Hz，时间对齐通常在 5 ms 以内。这些是很漂亮的数字。它们仍然不足以支撑按最近时间戳 join，因为“最近”可能悄悄跨过一个接管边界，或者取到错误的 validity 心跳。</p>
 
-    <p>所以身份改成因果分配：<b>唯一的 owner 只在 SDK 下发成功之后才分配 <code>control_tick_id</code>。</b>这次下发对应的已执行动作、被选来源、标签有效性和被接受的证据，共享同一个 id。Router 侧的提议 id 单独保留为 <code>decision_control_tick_id</code>，并且被明确规定不作为硬件动过的证据。任何缺失、冲突，或者只能靠时间戳回退才能 join 的区间，一律进隔离区——绝不猜成有效标签。</p>
+    <p>所以身份改成因果分配：<b>唯一的硬件控制进程只在 SDK 下发成功之后才分配 <code>control_tick_id</code>。</b>这次下发对应的已执行动作、被选来源、标签有效性和被接受的证据，共享同一个 id。Router 侧的提议 id 单独保留为 <code>decision_control_tick_id</code>，并且被明确规定不作为硬件动过的证据。任何缺失、冲突，或者只能靠时间戳回退才能 join 的区间，一律进隔离区——绝不猜成有效标签。</p>
 
-    <p>这就带出另一件值得分清楚的事。这条流水线里有五个不同的张量，大家都管它们叫"动作"：</p>
+    <p>这就带出另一件值得分清楚的事。这条流水线里有五个不同的张量，大家都管它们叫“动作”：</p>
   </div>
 
-  <figure class="wide">
-    <figcaption><b>一个动作的血缘。</b>每个箭头都是一次可能出错的变换。每个标签都是一条你事后能去读的 Parquet 流。</figcaption>
-    <svg viewBox="0 0 900 158" role="img" aria-label="从原始策略输出到已执行硬件动作的血缘">
+  <figure class="wide diagram">
+    <figcaption><b>一个动作的血缘。</b>每个箭头都是一次可能出错的变换。每个标签都是一条你事后能去读的 Parquet 流。<span class="scroll-hint">横向滚动图表 →</span></figcaption>
+    <div class="diagram-canvas"><svg viewBox="0 0 900 166" role="img" aria-label="从原始策略输出到已执行硬件动作的血缘">
       <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#9aa0a7"/></marker></defs>
       <g font-size="11">
-        <text x="168" y="14" font-size="9.5" fill="#9aa0a7" text-anchor="middle">对齐 / 混合</text>
-        <text x="352" y="14" font-size="9.5" fill="#9aa0a7" text-anchor="middle">滤波 + 映射</text>
+        <text x="168" y="14" font-size="9.5" fill="#9aa0a7" text-anchor="middle">对齐 / 接缝融合</text>
+        <text x="352" y="14" font-size="9.5" fill="#9aa0a7" text-anchor="middle">低通滤波器 + 映射</text>
         <text x="536" y="14" font-size="9.5" fill="#9aa0a7" text-anchor="middle">router</text>
         <text x="720" y="14" font-size="9.5" fill="#9aa0a7" text-anchor="middle">门 + SDK</text>
 
@@ -796,7 +808,7 @@ units = ("rad",)*6 + ("m",) + ("rad",)*6 + ("m",)</pre>
 
         <rect x="184" y="24" width="152" height="52" fill="#fff" stroke="#5f3fbe" rx="4"/>
         <text x="196" y="44" font-weight="700" fill="#111214">协调后</text>
-        <text x="196" y="61" font-size="10" fill="#6c727a">RTC merge 之后</text>
+        <text x="196" y="61" font-size="10" fill="#6c727a">RTC 合并之后</text>
         <text x="184" y="95" font-family="ui-monospace,monospace" font-size="9.5" fill="#5f3fbe">action.model</text>
         <path d="M338 50 L366 50" stroke="#9aa0a7" marker-end="url(#ar2)" fill="none"/>
 
@@ -824,15 +836,15 @@ units = ("rad",)*6 + ("m",) + ("rad",)*6 + ("m",)</pre>
         <text x="0" y="123" font-size="10.5" fill="#6c727a">专家路径以同样方式并行记录：</text>
         <text x="0" y="139" font-family="ui-monospace,monospace" font-size="9.5" fill="#96610a">action.expert_proposed → .expert_aligned_unclipped_robot → .expert_safe_robot</text>
       </g>
-    </svg>
+    </svg></div>
   </figure>
 
   <div class="col">
     <p>一行可训练，当且仅当 <b>source = EXPERT</b>、接管参考有效、安全有效，并且 <code>label.valid = true</code>。标签本身是 <code>action.expert_aligned_unclipped_robot</code>——操作员对齐之后的意图目标。</p>
 
-    <p>这里有个显而易见的问题：为什么用<em>未裁剪</em>的意图训练，而不是机器人实际做的？因为当机器人执行的基本就是那个目标时，意图是更干净的信号。但当安全层实质性地改动了它，用意图训练就等于教出一个从未在环境中被示范过的行为。那六段被隔离的录制就是这种情况——注意那个动词：隔离，不是修复。被污染的标签没法被反推回一个好标签。</p>
+    <p><em>未裁剪</em>的意图是更干净的标签，但前提是机器人执行的基本就是那个目标。如果安全层实质性地改动了它，用意图训练就等于教出一个从未在环境里被示范过的行为。那些录制被隔离而不是修复，因为被污染的意图标签没法被可靠地反推回来。</p>
 
-    <h3>接管对齐，简单说</h3>
+    <h3>显式对齐接管过渡</h3>
 
     <p>在接管的上升沿，我们恰好一次地固定两个构型——机器人的实测构型和专家设备的构型。之后的一切都是相对的：</p>
   </div>
@@ -861,122 +873,125 @@ units = ("rad",)*6 + ("m",) + ("rad",)*6 + ("m",)</pre>
   <div class="col">
     <p>没有它，你一接管，机器人就会朝外骨骼那个毫不相干的绝对构型跳过去。有了它，转移过来的是操作员的<em>运动</em>——那本来就是你想录的东西。</p>
 
-    <h3>一个变成了数据集属性的运行时常量</h3>
+    <h3>专家速度变成了数据集属性</h3>
 
-    <p>这块我最喜欢的小恐怖故事。QNexo adapter 的默认值是 <code>EXO_WAIST_YAW_SPEED = 0.1</code>，adapter 里再除以 100，得到每次更新 0.001 rad——在设计的 100 Hz 环路下大约 <b>0.1 rad/s</b>。这非常慢。操作员注意到了。</p>
+    <p>QNexo adapter 的默认值是 <code>EXO_WAIST_YAW_SPEED = 0.1</code>，adapter 里再除以 100，得到每次更新 0.001 rad——在设计的 100 Hz 环路下大约 <b>0.1 rad/s</b>。产出的专家纠正肉眼可见地慢。</p>
 
-    <p>凭手感把它提到 0.5，遥操作体验好很多，同时也改变了下一个 checkpoint 将要学习的纠正分布。因为模型预测的是未来目标位置而不是速度，更慢的标签只是意味着在 H32 horizon 上更小的目标变化量。而当同样的视觉和状态情境同时带着快的预训练标签和慢的 DAgger 标签，损失会很愉快地把它们平均成犹豫。</p>
+    <p>凭手感把它提到 0.5，遥操作体验好很多，同时也改变了下一个 checkpoint 将要学习的纠正分布。因为模型预测的是未来目标位置而不是速度，更慢的标签意味着在 32 步预测窗口内目标变化更小。当同样的视觉和状态同时对应较快的预训练标签与较慢的 DAgger 标签时，损失函数会把二者平均成幅度偏小、反应迟疑的动作。</p>
 
     <p>正确的标定做法是从原始 episode 里算逐关节的速度和加速度分位数，然后去匹配它们。另外：不要试图靠给 yaw 值乘一个系数来修复旧的慢数据。那会破坏时间上以及手臂／腰部之间的协调，产出的标签单看都合理、合起来不可能。</p>
 
-    <h3>还有，请把视频按视频编码</h3>
+    <h3>把相机流按视频编码</h3>
 
-    <p>数值、事件和对齐元数据属于 Parquet。相机帧不属于，而且这个账算得根本不接近。一个真实的 30 Hz 双臂 PiPER episode，三路 1280×720 RGB 以 Parquet 数组存储：</p>
+    <p>数值、事件和时间对齐元数据属于 Parquet。相机帧不属于，而且这个账算得根本不接近。一个真实的 30 Hz 双臂 PiPER episode，三路 1280×720 RGB 以 Parquet 数组存储：</p>
 
     <blockquote>
       <p>相机流：<b>4.59 GB</b>。全部 14 条数值／事件／标签流加起来：<b>0.59 MB</b>。episode 时长：<b>52.6 秒</b>。</p>
     </blockquote>
 
-    <p>这正是你能预测出来的结果——3 × 1280 × 720 × 3 字节是每帧 2.76 MB，乘 30 Hz 是 82.9 MB/s，乘 52.6 秒是 4.36 GB。对带相机噪声的 uint8 数组，Parquet 压缩基本没有作用，所以图像最后大约是其他一切的 <b>7,700 倍</b>，而且没有任何压缩设置能改变这个比例。编码成 H.264 MP4，把 帧 → 时间戳 → <code>control_tick_id</code> 的映射留在表格元数据里，因果 join 就仍然成立。</p>
+    <p>这正是你能预测出来的结果——3 × 1280 × 720 × 3 字节是每帧 2.76 MB，乘 30 Hz 是 82.9 MB/s，乘 52.6 秒是 4.36 GB。对带相机噪声的 uint8 数组，Parquet 压缩基本没有作用，所以图像最后大约是其他一切的 <b>7,700 倍</b>，而且没有任何压缩设置能改变这个比例。编码成 H.264 MP4，把帧 → 时间戳 → <code>control_tick_id</code> 的映射留在表格元数据里，因果关联就仍然成立。</p>
   </div>
 </section>
+
 
 <!-- 7 -->
 <section id="plumbing">
   <div class="col">
-    <div class="num">07</div>
-    <h2>新 checkpoint 应该只需要一份 descriptor</h2>
+    <div class="num">07 · MODEL ONBOARDING</div>
+    <h2>一个 checkpoint 该配一份部署描述文件，而不是一个新的 launcher 分支</h2>
 
-    <p>上面这些没有一件是有趣的研究。但每一件都要花掉真实的天数。真正让这些事不再疼的东西很无聊：让每个问题都恰好有一个文件能回答。</p>
+    <p>部署要能重复执行，前提是每个跟 checkpoint 有关的问题都只有一个机器可读的事实来源。部署描述文件（descriptor）就坐在模型 bundle 和通用 launcher 之间：它位于 <code>policy/&lt;adapter&gt;/deployments/</code>，声明 bundle、时序契约、相机 profile、服务方式、任务目录和验证步骤，再由 launcher 读取并选择正式 graph。</p>
 
-    <p>我们最后收敛到的规矩是：<b>一个新 checkpoint 需要的应该是一份 descriptor，而不是 launcher 里的一个新分支。</b>launcher 需要知道的关于某个模型的一切都是数据。launcher 本身里没有任何 <code>if model == …</code>。</p>
+    <p>我们最后收敛到的规矩是：<b>一个新 checkpoint 需要的是一份部署描述文件，而不是 launcher 里的一个新分支。</b>launcher 需要知道的关于某个模型的一切都是数据。launcher 本身里没有任何 <code>if model == …</code>。</p>
   </div>
 
   <div class="code wide">
-    <span class="f">policy/&lt;POLICY&gt;/deployments/&lt;deployment&gt;.yml &nbsp;·&nbsp; 节选</span>
-<pre data-lang="yaml">bundle:                          # 身份与不可变性
-  default_path: model-store/models/&lt;policy-family&gt;/&lt;checkpoint&gt;
+    <span class="f">policy/&lt;adapter&gt;/deployments/&lt;deployment&gt;.yml &nbsp;·&nbsp; 节选</span>
+<pre data-lang="yaml">bundle:                          # identity and immutability
+  default_path: model-store/models/&lt;policy&gt;/&lt;deployment&gt;/&lt;checkpoint&gt;
   required:     [checkpoint/model.safetensors, contract.json]
-  verifier:     policy/&lt;POLICY&gt;/verify_bundle.py
+  verifier:     policy/&lt;adapter&gt;/verify_bundle.py
 
-policy:                          # 时序合同，与 contract.json 一致
+policy:                          # timing contract, mirrored from contract.json
   action_frequency_hz:   30
   action_horizon:        32
   default_execute_chunk: 16
-  default_execute_mode:  auto    # 跟随模型的 execute_prefix_steps
+  default_execute_mode:  auto    # follow the model's execute_prefix_steps
 
 observation:
   camera_profile: camera_profiles/piper-x-dual-rgb-1280x720-30.yml
 
 server:
-  default_mode: managed          # launcher 拥有 PolicyServer 的生命周期
+  default_mode: managed          # launcher owns the PolicyServer lifecycle
 
 tasks:
-  catalog_path: contract.json    # 权威在 bundle，不在这个文件
+  catalog_path: contract.json    # authority is the bundle, not this file
 
 intake:
   provider:       aliyun_oss
-  expected_bytes: 7245891272     # 精确大小，会被校验
+  expected_bytes: FROM_PUBLISHER_MANIFEST
 
 qualification:
   verifier_args: [--full-manifest]
-  tests:         [ tests/test_inference.py, …, tests/test_pi05_piper_dagger50_h32_v1.py ]</pre>
+  tests:         [ tests/test_inference.py, …, tests/test_robot_contract.py ]</pre>
   </div>
 
   <div class="col">
     <p>从上往下读一遍，你就能回答：哪份权重、怎么校验、什么频率、用哪些相机、怎么服务、走哪张 graph、用哪些 prompt、从哪来、由哪些测试证明。这就是全部意图。</p>
 
-    <p>然后两条命令覆盖整个生命周期——<code>onboard</code> 负责首次 intake，<code>qualify</code> 负责已安装的运行时。同一套 stage 机器：把每个文件对着三份 manifest 校验（本地哈希、本地 manifest、发布方 manifest），准备隔离的模型运行时，跑 descriptor 自己的测试列表，绑定一个<b>空闲的 loopback 端口</b>，启动 managed server，用一份符合合同形状的合成观测探测它、断言 30 Hz 下有限的 <code>[32,14]</code>，最后做一次禁写的 launcher dry run。产出是一份 JSON 报告和逐阶段编号日志。</p>
+    <p>两条命令覆盖整个生命周期——<code>onboard</code> 负责首次接入，<code>qualify</code> 负责已安装的运行时。同一套分阶段流程会校验每个文件、准备隔离的模型运行时、执行 descriptor 声明的测试、绑定一个<b>空闲的 loopback 端口</b>、启动由 launcher 管理的 server、用符合契约的合成观测探测服务，再做一次禁写的 launcher dry run。产出是一份 JSON 报告和逐阶段编号日志。</p>
+
+    <p>这里的三重校验各管一层：<b>本地哈希</b>是当前文件实际算出的 SHA-256；<b>本地 manifest</b> 是接入后生成的完整文件清单；<b>发布方 manifest</b> 是上游随 bundle 交付的权威清单。三者一致，才能证明下载没有缺文件、本地没有被改写，而且安装内容确实对应发布者声明的那一份。</p>
 
     <div class="note warn">
-      <span class="lbl">为什么那句话里有"空闲的 loopback 端口"</span>
+      <span class="lbl">端口归属</span>
       <p>因为看到 <code>address already in use</code> 时，最诱人的做法是把占着端口的东西全杀掉，而我们见过这么干的下场。正确做法是找出监听者并校验它的 WebSocket <code>HELLO</code>：部署身份一致就显式复用；不一致就只停 launcher 自己拥有的那个进程。</p>
       <p>一个来自别的 checkpoint、恰好在对的端口上应答的野生 server，会自信地给你喂一整个下午的错误动作，而你的日志里不会有任何一行看起来可疑。</p>
     </div>
 
-    <p>这一切底下是一条我们严格得有点不讲道理的不变量：<b>有且只有一个进程可以调 SDK。</b>模型候选和专家候选都只是提议。router 选来源，机器人自有的门放行或 HOLD，owner 写入，recorder 旁观一切、而且永远没有写的能力。</p>
+    <p>核心的归属不变量很严格：<b>有且只有一个进程可以调 SDK。</b>模型动作和专家动作都只是提议。router 选来源，机器人自有的门放行或 HOLD，硬件控制进程写入，recorder 旁观一切、而且永远没有硬件权限。</p>
   </div>
 
-  <figure class="wide">
-    <figcaption><b>谁有资格碰机器人。</b>两个候选生产者，一次选择，一道门，一个写者。</figcaption>
-    <svg viewBox="0 0 900 342" role="img" aria-label="运行时所有权示意图">
+  <figure class="wide diagram">
+    <figcaption><b>谁有资格碰机器人。</b>两个候选生产者，一次选择，一道门，一个写者。<span class="scroll-hint">示意图可横向滚动 →</span></figcaption>
+    <div class="diagram-canvas"><svg viewBox="0 0 900 342" role="img" aria-label="运行时归属：模型候选与专家候选汇入 router，经过安全门，最终由唯一硬件控制进程写入">
       <defs>
         <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#9aa0a7"/></marker>
         <marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1a56c4"/></marker>
       </defs>
       <g font-size="11.5" fill="#6c727a">
         <rect x="0" y="10" width="188" height="122" fill="#fff" stroke="#1a56c4" stroke-width="1.2" rx="4"/>
-        <text x="14" y="31" font-size="10" font-weight="700" fill="#1a56c4" letter-spacing="1">模型候选</text>
-        <text x="14" y="53">三路相机 + 14 维状态</text>
+        <text x="14" y="31" font-size="10" font-weight="700" fill="#1a56c4" letter-spacing="1.2">MODEL CANDIDATE</text>
+        <text x="14" y="53">3 路相机 + 14 维状态</text>
         <text x="14" y="71">→ 观测 adapter</text>
         <text x="14" y="89">→ PolicyServer（WebSocket）</text>
-        <text x="14" y="107">→ chunk 调度器 + RTC</text>
+        <text x="14" y="107">→ 动作块调度器 + RTC</text>
         <text x="14" y="125" font-family="ui-monospace,monospace" font-size="9.5" fill="#9aa0a7">action.model_raw → .model</text>
 
         <rect x="0" y="198" width="188" height="122" fill="#fff" stroke="#96610a" stroke-width="1.2" rx="4"/>
-        <text x="14" y="219" font-size="10" font-weight="700" fill="#96610a" letter-spacing="1">专家候选</text>
+        <text x="14" y="219" font-size="10" font-weight="700" fill="#96610a" letter-spacing="1.2">EXPERT CANDIDATE</text>
         <text x="14" y="241">QNexo 外骨骼 / 主臂</text>
         <text x="14" y="259">→ FK + retarget（Mink IK）</text>
         <text x="14" y="277">→ 接管参考对齐</text>
         <text x="14" y="295" font-family="ui-monospace,monospace" font-size="9.5" fill="#9aa0a7">proposed → aligned → safe</text>
 
         <rect x="250" y="104" width="152" height="122" fill="#fff" stroke="#111214" stroke-width="1.4" rx="4"/>
-        <text x="264" y="125" font-size="10" font-weight="700" fill="#111214" letter-spacing="1">ROUTER</text>
+        <text x="264" y="125" font-size="10" font-weight="700" fill="#111214" letter-spacing="1.2">ROUTER</text>
         <text x="264" y="147">MODEL / EXPERT / HOLD</text>
-        <text x="264" y="165">唯一来源</text>
-        <text x="264" y="183">唯一 generation</text>
+        <text x="264" y="165">一个选定来源</text>
+        <text x="264" y="183">一个 generation</text>
         <text x="264" y="205">接管上升沿固定</text>
         <text x="264" y="221">两个参考</text>
 
         <rect x="454" y="104" width="152" height="122" fill="#fff" stroke="#ab3b35" stroke-width="1.4" rx="4"/>
-        <text x="468" y="125" font-size="10" font-weight="700" fill="#ab3b35" letter-spacing="1">最终门</text>
+        <text x="468" y="125" font-size="10" font-weight="700" fill="#ab3b35" letter-spacing="1.2">FINAL GATE</text>
         <text x="468" y="147">schema · 有限 · 新鲜</text>
         <text x="468" y="165">关节限位 · 步长限制</text>
         <text x="468" y="189">原子 PASS / HOLD</text>
         <text x="468" y="207">机器人自有，不可绕过</text>
 
         <rect x="658" y="104" width="152" height="122" fill="#fff" stroke="#0d7059" stroke-width="1.8" rx="4"/>
-        <text x="672" y="125" font-size="10" font-weight="700" fill="#0d7059" letter-spacing="1">唯一 OWNER</text>
+        <text x="672" y="125" font-size="10" font-weight="700" fill="#0d7059" letter-spacing="1.2">SOLE OWNER</text>
         <text x="672" y="147">唯一可以调用</text>
         <text x="672" y="165">SDK writer 的进程</text>
         <text x="672" y="189">下发成功之后</text>
@@ -992,7 +1007,7 @@ qualification:
         <path d="M606 165 L656 165" fill="none" stroke="#9aa0a7" stroke-width="1.3" marker-end="url(#ar)"/>
         <path d="M810 165 L846 165" fill="none" stroke="#9aa0a7" stroke-width="1.3" marker-end="url(#ar)"/>
         <path d="M848 198 L848 250 L64 250" fill="none" stroke="#d6d5cf" stroke-width="1" stroke-dasharray="3 3"/>
-        <text x="628" y="244" font-size="10" fill="#9aa0a7">实测反馈 + 下发确认</text>
+        <text x="612" y="244" font-size="10" fill="#9aa0a7">实测反馈 + 下发确认</text>
 
         <rect x="250" y="280" width="560" height="44" fill="#f6f6f3" stroke="#d6d5cf" stroke-dasharray="3 3" rx="4"/>
         <text x="266" y="299" font-size="10" font-weight="700" fill="#6c727a" letter-spacing="1">规范 RECORDER —— 读每一个阶段，不写任何硬件</text>
@@ -1001,7 +1016,7 @@ qualification:
         <path d="M530 226 L530 278" fill="none" stroke="#d6d5cf" stroke-width="1" stroke-dasharray="2 3"/>
         <path d="M734 226 L734 278" fill="none" stroke="#d6d5cf" stroke-width="1" stroke-dasharray="2 3"/>
       </g>
-    </svg>
+    </svg></div>
     <div class="legend">
       <span><i style="background:#fff;border-color:#1a56c4"></i>模型路径 —— 只是提议，没有硬件权限</span>
       <span><i style="background:#fff;border-color:#96610a"></i>专家路径 —— 只是提议，没有硬件权限</span>
@@ -1014,29 +1029,30 @@ qualification:
   <div class="col">
     <p>VLM 站在这一切之上，而这个位置是刻意的。任务选择和恢复推理是慢速、会出错的；运动控制是硬实时的。把它们直接接在一起，一次两秒的语言模型往返就会跑进一个 33 毫秒的控制环里。</p>
 
-    <p>所以我们的 supervisor 不是第二张 Dora graph。它是一个独立进程，只通过带认证的 loopback API 通信，只能发出 checkpoint 那份精确的五条 prompt 目录里的条目（目录之外一律 fail closed），而且从不发关节目标。它的 rollout 预算在唯一写者处按实际收到的 model action 计数——不看墙钟，也不信它自己的计数。rollout 一旦开始，实时路径完全不变，VLM 不在里面。</p>
+    <p>supervisor 不是第二张 Dora 控制 graph。它通过带认证的 loopback API 通信，只能发出 checkpoint 声明目录里的 prompt，而且从不发关节目标。唯一写者按实际收到的模型动作计算它的 rollout 预算。执行一旦开始，实时路径里没有 VLM。</p>
   </div>
 </section>
+
 
 <!-- 8 -->
 <section id="boring">
   <div class="col">
-    <div class="num">08</div>
+    <div class="num">08 · FAULT ISOLATION</div>
     <h2>沿着第一处断裂的边界排查</h2>
 
-    <p>不是每个谜都很深。下面这些是我们现在会先查的，大致按"最后发现真是它"的频率排序。</p>
+    <p>从第一个失效的边界开始查，不要从机器人最后表现出来的视觉症状倒推。下面这张表按现场排查顺序列出回报最高的检查项。</p>
   </div>
 
   <div class="table wide">
     <table>
       <thead><tr><th style="width:23%">症状</th><th style="width:25%">我们很想做的事</th><th>通常真正的原因</th></tr></thead>
       <tbody>
-        <tr><td>机器人完全不动</td><td>怪推理，加平滑</td><td><code>ENABLE_WRITE=0</code>。频率高得惊人。然后才是生命周期状态、控制器模式、新鲜的 SDK 反馈、实际下发计数。</td></tr>
+        <tr><td>机器人完全不动</td><td>怪推理，加平滑</td><td><code>ENABLE_WRITE=0</code>——这比想象中常见。然后才是生命周期状态、控制器模式、新鲜的 SDK 反馈、实际下发计数。</td></tr>
         <tr><td>反馈报 0 Hz</td><td>调低新鲜度阈值</td><td>CAN 身份、供电、控制器模式。放宽的看门狗造不出缺失的反馈——它只是让你去指挥一台你看不见的机器人。</td></tr>
-        <tr><td>能加载但行为随机</td><td>以为形状对上了就是兼容</td><td>归一化统计量、tokenizer、相机键、状态字段顺序、单位、动作逆变换。对着 bundle 比，别对着记忆比。</td></tr>
+        <tr><td>能加载但行为随机</td><td>以为形状对上了就是兼容</td><td>归一化统计量、tokenizer、相机键、状态字段顺序、单位、动作逆变换。对着模型包比，别对着记忆比。</td></tr>
         <tr><td>左右反了</td><td>把 UI 标签换到看起来对为止</td><td>顺着序列号 → instance 角色 → graph 输出 → 观测键 → 训练相机角色追一遍。然后去相机前挥手。</td></tr>
-        <tr><td>相机启动后卡死</td><td>把期望的 USB 3.2 放宽到 2.1</td><td>带宽、hub、线缆。frame-number 缺口才是测量值；放宽身份校验造不出帧。</td></tr>
-        <tr><td>停—动—停</td><td>把混合加长</td><td>队列饥饿、被拒的替换、迟到的结果。加长混合只会<em>更糟</em>。见 §3。</td></tr>
+        <tr><td>相机启动后卡死</td><td>把期望的 USB 3.2 放宽到 2.1</td><td>带宽、hub、线缆。帧号缺口才是测量值；放宽身份校验造不出帧。</td></tr>
+        <tr><td>停—动—停</td><td>把接缝融合加长</td><td>队列饥饿、被拒的替换、迟到的结果。加长融合只会<em>更糟</em>。见 §3。</td></tr>
         <tr><td>动作过激</td><td>把所有平滑器一次全加上</td><td>把原始逐步速度和训练分位数比较，然后只加一个能归因的处理器。</td></tr>
         <tr><td>数据集巨大</td><td>调高 Parquet 压缩</td><td>数值走 Parquet，相机走 MP4。比例约 7,700:1，压缩设置只是噪声。</td></tr>
       </tbody>
@@ -1044,46 +1060,47 @@ qualification:
   </div>
 
   <div class="col">
-    <p>这些背后的做法是同一个：不要从最终的视觉症状开始调。跟着一条观测和一个动作穿过整个系统，找到<em>数值第一次不再符合它的合同的那个边界</em>。五个问题，按顺序——模型收到了什么，它返回了什么，运行时调度了什么，owner 接受了什么，物理上发生了什么。大多数争论的发生，是因为有人从第一个问题直接跳到了第五个。</p>
+    <p>这些背后的做法是同一个：不要从最终的视觉症状开始调。跟着一条观测和一个动作穿过整个系统，找到<em>数值第一次不再符合运行时契约的那个边界</em>。五个问题，按顺序——模型收到了什么，它返回了什么，运行时调度了什么，硬件控制进程接受了什么，物理上发生了什么。大多数争论的发生，是因为有人从第一个问题直接跳到了第五个。</p>
 
-    <h3>五组混起来之后让我们付出真实时间的词</h3>
+    <h3>五组最容易混淆、也最耗排查时间的概念</h3>
 
     <p>这里每一组，一旦在某个人脑子里或某份文档里塌缩掉，都会产出一类特别难找的 bug——因为所有相关的人用的是同一个词。</p>
 
     <ul>
       <li><b>当前 vs 历史。</b>当前代码才是事实来源。八月的一段聊天记录，是关于一个此后可能已经变了的系统的案例。§6 里的 recorder bug 是真的，也已经修了；能迁移的是那些失败的<em>形状</em>。</li>
-      <li><b>客户端 RTC vs 模型原生 guidance。</b>上面说过了。开预取不会给你任何关于条件化的东西。</li>
-      <li><b>原始 vs 协调后 vs 已执行。</b>三个不同的张量。一旦开了混合，协调后的流就不再逐字节等于原始回复，而在证据链路里把它标成"raw"，会污染它下游的一切。</li>
+      <li><b>客户端 RTC vs 模型原生引导。</b>上面说过了。打开预取，不会凭空增加模型条件或生成时引导。</li>
+      <li><b>原始 vs 协调后 vs 已执行。</b>三个不同的张量。一旦开了接缝融合，协调后的流就不再逐字节等于原始回复，而在证据链路里把它标成"raw"，会污染它下游的一切。</li>
       <li><b>原始 episode vs 派生视图。</b>完整录制保留上下文；训练视图是它的一个严格投影。两个都留着，不可变，这样一个标注决定可以被重新推导，而不是拿来吵架。</li>
-      <li><b>资格验证 vs 移动授权。</b>报告全绿证明的是 restore、合同形状、服务一致性和一次禁写 dry run。它对任务成功率什么都没说——bundle 自己的 <code>evidence_scope.does_not_establish</code> 就明说了。让真机动起来，需要一次显式的 live-run 请求、写授权门，以及一个手放在急停上的人在场的监督 canary。</li>
+      <li><b>资格验证 vs 移动授权。</b>报告全绿证明的是 restore、契约形状、服务一致性和一次禁写 dry run。它对任务成功率什么都没说——模型包自己的 <code>evidence_scope.does_not_establish</code> 就明说了。让真机动起来，需要一次显式的 live-run 请求、写授权门，以及一个手放在急停上的人在场的监督 canary。</li>
     </ul>
 
-    <h3>我们现在落在哪里</h3>
+    <h3>数据集优先的排查</h3>
 
-    <p>我不觉得这里面有什么新东西，如果有我反而会有点意外。但它非常一致：<b>每一次部署变得玄学，答案都在数据集里——而每一次我们改成在运行时层去修它，我们都把下一个 checkpoint 弄得更差了。</b></p>
+    <p>一致的结果是操作层面的，不是什么新发现：<b>当部署行为变得难以解释时，先回到数据集和训练契约，再考虑加运行时修正。</b></p>
 
     <p>从数据里采起始位姿。从数据里测专家速度。从数据里恢复相机角色和时序。把动作语义追溯回那个生成数据的变换。</p>
 
-    <p>训练合同显然修不了一根断掉的 CAN 线，也修不了一台坏相机。它做的是：不让硬件故障被误判成模型故障，也不让一次分布外部署被运行时小技巧"修好"、然后悄悄毒化下一轮训练。</p>
+    <p>训练契约显然修不了一根断掉的 CAN 线，也修不了一台坏相机。它做的是：不让硬件故障被误判成模型故障，也不让一次分布外部署被运行时小技巧“修好”、然后悄悄毒化下一轮训练。</p>
 
-    <p>还有不少我们没有好答案的东西。我们的示范里没有真正的起始位姿多样性，而再聪明的 medoid 筛选也造不出从未被记录过的覆盖。我们也没有一个有原则的方法去选 DAgger 的 replay 比例——40/60 是"有效"的那个，不是推导出来的那个。而且我们仍然没法从单次 rollout 判断，一个 checkpoint 是今天状态不好，还是学到了某种微妙的错误。如果你对其中任何一个有好答案，我是真的想听听。</p>
+    <p>没解决的限制还在。示范数据里没有足够的起始位姿多样性，medoid 筛选造不出缺失的覆盖，40/60 的 DAgger 回放比例是经验值而不是推导出来的，单次 rollout 也分不清方差和系统性的策略缺陷。</p>
   </div>
 </section>
 
+
 <section id="hardware">
-  <div class="sec-num">09 · 硬件排障</div>
-  <h2>GR3 和 PiPER 的故障边界完全不同</h2>
-  <p class="sec-lede">GR3 和双臂 PiPER 会在不同的物理边界上失败。GR3 是承重人形机器人，首先要确认支撑和站立状态；PiPER X 虽然是固定底座，但失能的机械臂仍会在重力下掉落，首先要确认设备身份、CAN 反馈和伺服使能状态。</p>
+  <div class="sec-num">09 · 硬件排障手册</div>
+  <h2>GR3 和 PiPER 的故障方式完全不同</h2>
+  <p class="sec-lede">GR3 和双臂 PiPER 会在不同的物理边界上出问题。GR3 是承重人形机器人，支撑和站立状态永远排在第一位；PiPER X 是固定底座，但失能的机械臂仍会在重力下坠落，所以设备身份、CAN 反馈和伺服使能状态排在第一位。</p>
 
   <div class="hardware-index wide">
     <a href="#hardware-gr3">
       <span class="robot-kind">承重人形机器人</span>
-      <span class="robot-name">GR3 排障流程 ↓</span>
+      <span class="robot-name">GR3 排障手册 ↓</span>
       <span class="robot-risk">吊装支撑、脚底承重、PdStand，以及 Aurora 控制器状态链。</span>
     </a>
     <a href="#hardware-piper">
       <span class="robot-kind">固定底座双臂机器人</span>
-      <span class="robot-name">双臂 PiPER X 排障流程 ↓</span>
+      <span class="robot-name">双臂 PiPER X 排障手册 ↓</span>
       <span class="robot-risk">两路 CAN 身份、每条手臂六个使能位、三路相机物理角色，以及重力安全恢复。</span>
     </a>
   </div>
@@ -1092,56 +1109,56 @@ qualification:
     <div class="robot-guide-head">
       <div class="robot-badge">GR3</div>
       <div>
-        <h3>支撑和动态平衡就是安全边界</h3>
-        <p>policy 进程正在运行，并不能证明 GR3 已经在承受自身重量。吊装必须保持连接；先从状态回读确认站立控制器，再把声明过的关节交给 policy 控制。</p>
+        <h3>支撑和平衡就是安全边界。</h3>
+        <p>policy 进程在跑，不代表 GR3 已经在承受自身重量。吊装保持连接，先从状态回读确认站立控制器，再把声明过的关节交给 policy 控制。</p>
       </div>
     </div>
 
     <div class="hardware-steps">
       <div class="hardware-step"><span class="num">01</span><b>吊起</b><span>完整支撑机器人，清空跌倒区域并整理线缆。</span></div>
       <div class="hardware-step"><span class="num">02</span><b>站立</b><span>从控制器回读确认 standing mode。</span></div>
-      <div class="hardware-step"><span class="num">03</span><b>慢慢下放</b><span>小幅移动吊装，直到两只脚掌平放。</span></div>
+      <div class="hardware-step"><span class="num">03</span><b>下放</b><span>小幅移动吊装，直到两只脚掌平放。</span></div>
       <div class="hardware-step"><span class="num">04</span><b>承重检查</b><span>确认地面反作用力和主动恢复能力。</span></div>
-      <div class="hardware-step"><span class="num">05</span><b>启动策略</b><span>只初始化一次，并等待准确的 READY 交接。</span></div>
+      <div class="hardware-step"><span class="num">05</span><b>启动 policy</b><span>只初始化一次，等待准确的 READY 交接。</span></div>
     </div>
 
     <figure>
-      <figcaption><b>图 6A · GR3 在 PdStand 启动阶段保持吊装支撑</b><span>只有确认站立控制器状态和真实承重行为之后，才能进入下一步。</span></figcaption>
+      <figcaption><b>图 6A · GR3 在 PdStand 启动阶段保持吊装支撑</b><span>站立控制器状态和承重行为都验证通过之前，吊装不能拆。</span></figcaption>
       <img class="field-photo" src="assets/gr3-pdstand-lift-supported.png" width="1080" height="1440" decoding="async" alt="GR3 人形机器人在进入 PdStand 时由上方吊装系统提供支撑">
     </figure>
 
     <div class="body">
-      <h3>完成五项检查，再运行 policy</h3>
+      <h3>五项检查做完，再运行</h3>
       <ol>
-        <li><b>先吊起。</b>完整支撑机器人，清空脚边、线缆和可能跌倒的区域，确保急停触手可及。</li>
-        <li><b>确认 standing mode。</b>等待控制器真实状态回读。进程在运行，本身不能证明状态正确。</li>
-        <li><b>缓慢下放。</b>用很小的吊装位移让两只脚掌平放。任何一只脚折叠、滑动或勾到线缆，都应立即停止。</li>
-        <li><b>感受承重。</b>轻推骨盆向后，直到能感受到地面对机器人的向上反作用力。吊装仍保持随时承重，再做一次很小的骨盆扰动，确认机器人会主动恢复。</li>
-        <li><b>启动 policy。</b>只初始化一次，等待准确的控制状态和 READY 消息，再开始运行。发生 fault 时不要连续点击初始化。</li>
+        <li><b>先吊起。</b>完整支撑机器人。清空脚边、线缆和跌倒区域，急停必须触手可及。</li>
+        <li><b>确认 standing mode。</b>等控制器真实状态回读。进程在跑，本身证明不了任何东西。</li>
+        <li><b>缓慢下放。</b>用很小的吊装位移让两只脚掌平放。任何一只脚折叠、打滑或勾到线缆，立刻停。</li>
+        <li><b>感受承重。</b>轻推骨盆向后，直到地面开始往回顶，手上能感到向上的反作用力。吊装仍保持随时承重，再对骨盆做一次小扰动，确认机器人会主动恢复。</li>
+        <li><b>启动 policy。</b>只初始化一次，等准确的控制状态和 READY 消息，再运行。出了 fault 不要反复按初始化。</li>
       </ol>
     </div>
 
     <div class="note rule">
       <span class="label">GR3 控制器状态链</span>
-      <p><code>AuroraCore → PdStand → i → UserController_A + RemoteState → CONTROLLER ready</code><br><b>UserController_A</b> 负责下半身 RL 平衡与行走；<b>RemoteState</b> 把声明过的上半身关节交给模型。AuroraClient 只请求和读取这些状态。</p>
+      <p><code>AuroraCore → PdStand → i → UserController_A + RemoteState → CONTROLLER ready</code><br><b>UserController_A</b> 跑下半身 RL 平衡与行走；<b>RemoteState</b> 把声明过的上半身关节交给模型。AuroraClient 只请求和读取这些状态。</p>
     </div>
 
     <div class="table zebra">
       <table>
         <thead><tr><th style="width:32%">GR3 问题</th><th>处理方式</th></tr></thead>
         <tbody>
-          <tr><td>没有确认 standing mode</td><td>保持机器人完全吊起，读取 controller/FSM 错误，不要继续下放。</td></tr>
-          <tr><td>脚已经接触地面，但感受不到向上反作用力</td><td>吊装仍在承担重量，或者有一只脚没有踩实。小幅继续下放，再检查两只脚掌。</td></tr>
-          <tr><td>受到轻微扰动后机器人不会主动恢复</td><td>不要运行 policy。恢复完整吊装支撑，检查电机反馈和 standing-controller 状态。</td></tr>
-          <tr><td>初始化失败</td><td>留在有吊装保护的 standing mode，修复交接链里真正失败的阶段。不要绕过，也不要连续重试。</td></tr>
-          <tr><td>需要停止 GR3</td><td><code>x</code> 冻结 policy 输出；<code>Ctrl-C</code> 返回 PdStand，并保持 AuroraCore 运行。不要把停止 AuroraCore 当作正常清理流程。</td></tr>
+          <tr><td>standing mode 没有确认</td><td>保持机器人完全吊起。读 controller/FSM 错误，不要继续下放。</td></tr>
+          <tr><td>脚已触地，但感受不到向上反作用力</td><td>吊装还在承担重量，或者有一只脚没踩实。小幅继续下放，再检查两只脚掌。</td></tr>
+          <tr><td>小扰动后机器人不会主动恢复</td><td>不要运行 policy。恢复吊装支撑，检查电机反馈和 standing-controller 状态。</td></tr>
+          <tr><td>初始化失败</td><td>留在有吊装保护的 standing mode，修好交接链里真正失败的阶段。不要绕过，也不要连续重试。</td></tr>
+          <tr><td>需要停止 GR3</td><td><code>x</code> 冻结 policy 输出；<code>Ctrl-C</code> 返回 PdStand，AuroraCore 保持运行。永远不要把停掉 AuroraCore 当作正常清理步骤。</td></tr>
         </tbody>
       </table>
     </div>
 
     <div class="note warn">
       <span class="label">GR3 停止条件</span>
-      <p><b>整次运行结束之前，吊装都不能拆除。</b>只要状态、支撑或平衡有任何不确定，就应在启动 policy 之前停止。</p>
+      <p><b>整次运行结束之前，吊装不能拆。</b>状态、支撑或平衡有任何不确定，就在启动 policy 之前停下来。</p>
     </div>
   </article>
 
@@ -1149,34 +1166,34 @@ qualification:
     <div class="robot-guide-head">
       <div class="robot-badge">PiPER X × 2</div>
       <div>
-        <h3>设备身份和反馈就是安全边界</h3>
-        <p>两条手臂各自拥有一条 SocketCAN 总线，三台相机也各自对应一个物理角色。只有 USB-CAN adapter 序列号、线缆标签、反馈数据和实际左右侧测试全部一致，逻辑名称才可信。</p>
+        <h3>身份和反馈就是安全边界。</h3>
+        <p>每条手臂有自己的 SocketCAN 总线，每台相机有固定的物理角色。adapter 序列号、线缆标签、反馈数据和实际左右侧测试全部对得上，逻辑名称才可信。</p>
       </div>
     </div>
 
     <div class="maintenance-boundary">
-      <div><b>XPolicy runtime</b>运行 policy graph、router，并且是生产环境中唯一的 SDK owner。维护前必须完整停止。</div>
+      <div><b>XPolicy runtime</b>跑 policy graph、router，是生产环境里唯一的 SDK owner。维护前必须完整停掉。</div>
       <div class="not-both">XOR</div>
-      <div><b>PiPER 维护 UI</b>手动执行 CAN、状态读取、Reset 和 Enable。重新启动 XPolicy 前必须退出。</div>
+      <div><b>PiPER 维护 UI</b>手动 CAN、状态读取、Reset 和 Enable 工具。重启 XPolicy 前必须关掉。</div>
     </div>
 
     <div class="hardware-steps">
-      <div class="hardware-step"><span class="num">01</span><b>释放所有权</b><span>停止 rollout 并退出 Dora，确认 PiPER owner 已不存在。</span></div>
-      <div class="hardware-step"><span class="num">02</span><b>支撑手臂</b><span>托住失能机械臂，并清除地面或障碍物接触。</span></div>
-      <div class="hardware-step"><span class="num">03</span><b>确认身份</b><span>按稳定 CAN 身份选择机械臂，绝不能依赖 <code>can0</code> 顺序。</span></div>
-      <div class="hardware-step"><span class="num">04</span><b>恢复</b><span>用匹配固件连接；必要时清除已确认的锁存 fault，再执行 Enable。</span></div>
-      <div class="hardware-step"><span class="num">05</span><b>验证并退出</b><span>检查六个使能位、CAN control 和持续反馈，然后退出 UI。</span></div>
+      <div class="hardware-step"><span class="num">01</span><b>释放所有权</b><span>停掉 rollout 并退出 Dora，确认 PiPER owner 已不存在。</span></div>
+      <div class="hardware-step"><span class="num">02</span><b>支撑手臂</b><span>托住失能机械臂，清除地面或障碍物接触。</span></div>
+      <div class="hardware-step"><span class="num">03</span><b>确认身份</b><span>按稳定 CAN 身份选机械臂，绝不能依赖 <code>can0</code> 顺序。</span></div>
+      <div class="hardware-step"><span class="num">04</span><b>恢复</b><span>用匹配固件连接；必要时清除已确认的锁存 fault，再 Enable。</span></div>
+      <div class="hardware-step"><span class="num">05</span><b>验证并退出</b><span>六个使能位、CAN control 和持续反馈都确认后，断开 UI。</span></div>
     </div>
 
     <div class="body">
       <h3>机械臂撞到地面并失能时</h3>
       <ol>
-        <li><b>先停止 runtime。</b>停止 policy 并退出 Dora graph，确认 XPolicy 的 PiPER owner 已断开。维护 UI 绝不能和 runtime 同时成为第二个 writer。</li>
-        <li><b>消除物理原因。</b>确保急停触手可及，托住失能机械臂抵抗重力，清除与地面或障碍物的接触，并检查手臂、夹爪和线缆。机械臂仍被卡住时不要 Enable。</li>
-        <li><b>打开现场批准的 PiPER 维护 UI。</b>刷新 CAN，按稳定接口选择对应侧；只有接口尚未 UP 时才以 1 Mbps 激活；选择 instance profile 声明的固件，然后 Connect。</li>
-        <li><b>先读状态，再发命令。</b>确认关节反馈和实际物理侧。点击 <b>Enable</b>。如果仍有锁存 fault 导致 Enable 被拒绝，继续托住手臂，按照 UI 或厂商流程执行一次 <b>Reset</b>，再 Enable。不要对无法解释的 fault 连续 Reset。</li>
-        <li><b>证明已经恢复。</b>六个关节使能位都必须为 enabled，反馈必须持续更新，follower arm 还必须回报 CAN-control/follower mode。不要用 Go Zero、Move P/L 或轨迹回放作为使能测试。</li>
-        <li><b>归还所有权。</b>Disconnect 并关闭维护 UI。先运行仓库的 no-write 设备验证，再启动正式 launcher；XPolicy owner 必须重新成为唯一 SDK writer。</li>
+        <li><b>先停 runtime。</b>停掉 policy 并退出 Dora graph，确认 XPolicy 的 PiPER owner 已断开。维护 UI 绝不能和 runtime 同时存在，变成第二个 writer。</li>
+        <li><b>排除物理原因。</b>急停保持触手可及，托住失能机械臂抵抗重力，清掉地面或障碍物接触，检查手臂、夹爪和线缆。机械臂还被卡住时不要 Enable。</li>
+        <li><b>打开现场批准的 PiPER 维护 UI。</b>刷新 CAN，按稳定接口选受影响的那一侧；接口还没 UP 才以 1 Mbps 激活；选 instance profile 声明的固件，然后 Connect。</li>
+        <li><b>先读状态，再发命令。</b>确认关节反馈和实际物理侧。点 <b>Enable</b>。如果还有锁存 fault 导致 Enable 被拒，继续托住手臂，按 UI 或厂商流程执行一次 <b>Reset</b>，再 Enable。解释不了的 fault 不要反复 Reset。</li>
+        <li><b>证明恢复。</b>六个关节使能位必须全部为 enabled，反馈必须持续更新，follower arm 还必须回报 CAN-control/follower mode。不要拿 Go Zero、Move P/L 或轨迹回放当使能测试。</li>
+        <li><b>归还所有权。</b>Disconnect 并关掉维护 UI。先跑仓库的 no-write 设备验证，再启动正式 launcher。XPolicy owner 必须重新成为唯一的 SDK writer。</li>
       </ol>
     </div>
 
@@ -1188,11 +1205,11 @@ qualification:
 
     <div class="note warn">
       <span class="label">维护警告</span>
-      <p>维护程序使用官方 <code>pyAgxArm</code> SDK。Disable、Reset、角色切换、Go Zero 和轨迹控制都可能导致机器人运动或在重力下掉落。软件急停不能替代物理急停；只使用恢复所必需的最少控制。</p>
+      <p>维护程序用的是官方 <code>pyAgxArm</code> SDK。Disable、Reset、角色切换、Go Zero 和轨迹控制都可能让机械臂运动或在重力下坠落。软件急停替代不了物理急停；只用恢复所必需的最少控制。</p>
     </div>
 
     <figure>
-      <figcaption><b>图 6B · 双臂 PiPER 身份模板</b><span>每个工作站都必须维护经过审核的 instance profile，绝不能复制其他工作站的硬件身份。</span></figcaption>
+      <figcaption><b>图 6B · 双臂 PiPER 身份模板</b><span>每个工位都要维护自己审核过的 instance profile，绝不能复制其他工位的硬件身份。</span></figcaption>
       <div class="piper-identity">
         <div class="identity-card">
           <div class="side">左臂 <span>state[0:7]</span></div>
@@ -1217,23 +1234,23 @@ qualification:
 
     <div class="note rule">
       <span class="label">稳定 CAN 身份</span>
-      <p>Linux 枚举顺序可能在重启或重新插拔后改变。USB-CAN 序列号标识 adapter，稳定 netdev 由它派生。由于 SDK 可能不提供有用且唯一的机械臂序列号，adapter 必须始终与对应侧 CAN harness 物理绑定并贴好标签。工作站 commissioning 时，应通过受控的单臂断开测试确认左右映射。</p>
+      <p>Linux 枚举顺序在重启或重新插拔后可能变。USB-CAN 序列号标识 adapter，稳定 netdev 由它派生。SDK 可能不提供有用且唯一的机械臂序列号，所以 adapter 必须和对应侧的 CAN harness 物理绑定并贴好标签。工位 commissioning 时，用一次受控的单臂断开测试确认左右映射。</p>
     </div>
 
     <figure>
-      <figcaption><b>图 6C · 相机角色与模型输入顺序</b><span>画面在 UI 中的位置只是显示布局；模型接收的是根据 RealSense 序列号解析出的命名角色。</span></figcaption>
+      <figcaption><b>图 6C · 相机角色与模型输入顺序</b><span>画面在屏幕上的位置只是显示布局；模型收到的是按 RealSense 序列号解析出的命名角色。</span></figcaption>
       <div class="camera-sequence">
-        <div class="camera-role"><b>左腕 → <code>camera_left</code></b><code>RS &lt;left serial&gt;</code><code>USB &lt;left descriptor&gt;</code><span>应为 USB 3.x。遮挡或晃动这台相机时，只允许左侧命名流发生变化。</span></div>
-        <div class="camera-role"><b>头部 → <code>camera_head</code></b><code>RS &lt;head serial&gt;</code><code>USB &lt;head descriptor&gt;</code><span>应为 USB 3.x。确认 RGB 方向正确、没有镜像，并保持训练采集时的安装几何关系。</span></div>
-        <div class="camera-role"><b>右腕 → <code>camera_right</code></b><code>RS &lt;right serial&gt;</code><code>USB &lt;right descriptor&gt;</code><span>应为 USB 3.x。遮挡或晃动这台相机时，只允许右侧命名流发生变化。</span></div>
+        <div class="camera-role"><b>左腕 → <code>camera_left</code></b><code>RS &lt;left serial&gt;</code><code>USB &lt;left descriptor&gt;</code><span>应为 USB 3.x。物理遮挡或晃动这台相机时，只允许左侧命名流变化。</span></div>
+        <div class="camera-role"><b>头部 → <code>camera_head</code></b><code>RS &lt;head serial&gt;</code><code>USB &lt;head descriptor&gt;</code><span>应为 USB 3.x。确认 RGB 方向正确、没有镜像，并保持训练采集时的安装几何。</span></div>
+        <div class="camera-role"><b>右腕 → <code>camera_right</code></b><code>RS &lt;right serial&gt;</code><code>USB &lt;right descriptor&gt;</code><span>应为 USB 3.x。物理遮挡或晃动这台相机时，只允许右侧命名流变化。</span></div>
       </div>
       <div class="fig-body">
-        <p class="fig-note"><b>模型键：</b><code>left_wrist_rgb ← camera_left</code>、<code>head_rgb ← camera_head</code>、<code>right_wrist_rgb ← camera_right</code>。不要根据 operator UI 中哪块画面显示在左边来推断模型输入顺序。</p>
+        <p class="fig-note"><b>模型键：</b><code>left_wrist_rgb ← camera_left</code>、<code>head_rgb ← camera_head</code>、<code>right_wrist_rgb ← camera_right</code>。不要根据 operator UI 里哪块画面显示在左边来推断模型输入顺序。</p>
       </div>
     </figure>
 
     <div class="code">
-      <div class="code-bar"><span class="f">No-write 身份检查</span><span class="n">不会启动 Dora、模型服务或机械臂命令</span></div>
+      <div class="code-bar"><span class="f">No-write 身份检查</span><span class="n">不启动 Dora、模型服务或机械臂命令</span></div>
 <pre data-lang="bash">runtime/robot_dagger/scripts/install_robot_devices.py \
   --profile runtime/robot_dagger/config/robot_instances/&lt;robot-instance&gt;.yml \
   --verify-only</pre>
@@ -1243,24 +1260,25 @@ qualification:
       <table>
         <thead><tr><th style="width:32%">双臂 PiPER 问题</th><th>处理方式</th></tr></thead>
         <tbody>
-          <tr><td><code>Device ... does not exist</code></td><td>根据配置的 USB-CAN 序列号解析稳定 netdev。在确认物理 harness 对应关系之前，不要改名另一条接口。</td></tr>
-          <tr><td>反馈为 0 Hz，或机械臂反馈缺失</td><td>检查机械臂供电、物理急停、CAN 线缆、终端电阻、接口 UP 状态和 1 Mbps bitrate。绝不能降低 freshness 阈值来掩盖反馈缺失。</td></tr>
-          <tr><td>六个关节使能位始终为 false</td><td>停止 runtime，托住机械臂，在维护 UI 中检查状态；只有确认 fault 原因后才能清除锁存错误，再执行 Enable，并验证反馈位，而不是只看命令返回值。</td></tr>
-          <tr><td>机械臂处于 Standby，而不是 CAN control</td><td>确认它确实是 follower/output arm，并且选中了正确总线。只有按照 UI 要求隔离目标机械臂之后，才能执行 follower/CAN-mode 操作；较旧固件可能还需要断电重启。</td></tr>
-          <tr><td>主动拔掉了一条机械臂</td><td>缺失的逻辑角色必须和物理侧一致。如果拔掉物理右臂却报 left-arm error，任何 live run 之前都必须先修复 instance/harness 映射。</td></tr>
-          <tr><td>相机显示在 UI 的错误一侧</td><td>不要相信 tile 的屏幕位置。通过物理遮挡测试验证 serial-to-role 映射，再确认模型键映射。UI 标签和模型输入是两项不同的声明。</td></tr>
-          <tr><td>相机协商成 USB 2.1</td><td>检查线缆、hub、端口和总带宽，恢复 USB 3.x。把期望 profile 改成 2.1 只会消除警告，并不能避免后续丢帧或超时。</td></tr>
-          <tr><td>相机短暂工作后超时</td><td>检查 frame number 是否持续增长和 USB 拓扑。减少带宽竞争或恢复训练时的相机 profile；不能把最后一帧重复发送并称为 live。</td></tr>
+          <tr><td><code>Device ... does not exist</code></td><td>把配置的 USB-CAN 序列号解析成稳定 netdev。物理 harness 对应关系确认之前，不要改另一条接口的名字。</td></tr>
+          <tr><td>反馈 0 Hz，或机械臂反馈缺失</td><td>查机械臂供电、物理急停、CAN 线缆、终端电阻、接口 UP 状态和 1 Mbps bitrate。绝不能降低 freshness 阈值来掩盖反馈缺失。</td></tr>
+          <tr><td>六个关节使能位一直是 false</td><td>停掉 runtime，托住机械臂，在维护 UI 里查状态；只有确认了 fault 原因才清锁存错误，再 Enable，并验证反馈位，而不是只看命令返回值。</td></tr>
+          <tr><td>机械臂报 Standby，而不是 CAN control</td><td>确认它确实是 follower/output arm，并且选对了总线。只有按 UI 要求把目标机械臂电气隔离后，才能执行 follower/CAN-mode 操作；较旧固件可能还要断电重启。</td></tr>
+          <tr><td>主动拔掉了一条机械臂</td><td>缺失的逻辑角色必须和物理侧一致。拔掉物理右臂却报 left-arm error，任何 live run 之前都要先修 instance/harness 映射。</td></tr>
+          <tr><td>相机显示在 UI 的错误一侧</td><td>别信 tile 的屏幕位置。用物理遮挡测试验证 serial-to-role 映射，再确认模型键映射。UI 标签和模型输入是两回事。</td></tr>
+          <tr><td>相机协商成 USB 2.1</td><td>查线缆、hub、端口和总带宽，恢复 USB 3.x。把期望 profile 改成 2.1 只会压掉警告，挡不住后面的丢帧和超时。</td></tr>
+          <tr><td>相机短暂工作后超时</td><td>查 frame number 是否持续增长和 USB 拓扑。减少带宽竞争或恢复训练时的相机 profile；不能把最后一帧反复发送然后管它叫 live。</td></tr>
         </tbody>
       </table>
     </div>
 
     <div class="note warn">
       <span class="label">双臂 PiPER 停止条件</span>
-      <p><b>只要任意机械臂失能、状态过期或身份不明确，就不要启动 policy。</b>两条手臂的状态和所有必需相机角色都必须保持 fresh，模型的 14 维 observation 才有效。</p>
+      <p><b>任意一条机械臂失能、状态过期或身份不明确，就不要启动 policy。</b>两条手臂的状态和所有必需相机角色都必须 fresh，模型的 14 维 observation 才有效。</p>
     </div>
   </article>
 </section>
+
 <div class="end col">
   <h2>参考资料与实现边界</h2>
   <ul>

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="可靠真机部署基础设施通用指南：运行时合同、异步推理、RTC、动作处理、DAgger 数据和声明式模型接入。">
-<title>构建可靠的真机部署基础设施</title>
+<meta name="description" content="学习型机器人策略部署实战指南：闭环控制、训练契约、异步推理、动作平滑、干预数据和模型接入。">
+<title>学习型机器人策略部署：基础设施实战指南</title>
 <style>
 :root{
   color-scheme:light;
@@ -65,6 +65,7 @@ th,td{padding:12px 18px 12px 0;border-bottom:1px solid var(--line);text-align:le
 th{color:var(--faint);font-size:10px;letter-spacing:.11em;text-transform:uppercase}
 td:first-child{color:var(--ink);font-weight:620}
 .chain{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));margin:28px 0;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2)}
+.chain.loop{grid-template-columns:repeat(5,minmax(0,1fr))}
 .chain div{position:relative;padding:16px 18px 16px 0;color:var(--muted);font-size:11.5px;line-height:1.45}
 .chain div+div{padding-left:22px}
 .chain div+div::before{content:"→";position:absolute;left:2px;color:var(--faint);font-family:var(--mono)}
@@ -84,10 +85,11 @@ td:first-child{color:var(--ink);font-weight:620}
   .menu{display:block}
   h1{font-size:2.25rem}
   .chain{grid-template-columns:1fr 1fr}
+  .chain.loop{grid-template-columns:1fr 1fr}
   .chain div:nth-child(odd){padding-left:0}
   .chain div:nth-child(odd)::before{display:none}
 }
-@media(max-width:520px){.chain{grid-template-columns:1fr}.chain div{padding-left:0!important}.chain div::before{display:none!important}}
+@media(max-width:520px){.chain,.chain.loop{grid-template-columns:1fr}.chain div{padding-left:0!important}.chain div::before{display:none!important}}
 </style>
 </head>
 <body>
@@ -99,9 +101,10 @@ td:first-child{color:var(--ink);font-weight:620}
 <aside class="side" id="side">
   <p class="side-title">目录</p>
   <nav aria-label="文章目录">
-    <a href="#contract">运行时合同</a>
-    <a href="#baseline">原始策略基线</a>
-    <a href="#architecture">系统流程</a>
+    <a href="#loop">控制闭环</a>
+    <a href="#contract">训练契约</a>
+    <a href="#baseline">朴素基线</a>
+    <a href="#architecture">运行时边界</a>
     <a href="#rtc">异步推理</a>
     <a href="#motion">动作处理</a>
     <a href="#initial">初始状态</a>
@@ -112,53 +115,68 @@ td:first-child{color:var(--ink);font-weight:620}
 </aside>
 
 <main>
-
 <header class="article-head col" id="top">
-  <h1>构建可靠的真机部署基础设施</h1>
-  <p class="meta">通用现场指南<br>2026 年 9 月</p>
+  <h1>学习型机器人策略部署：基础设施实战指南</h1>
+  <p class="meta">一份面向现场的实用指南<br>2026 年 9 月</p>
   <div class="intro">
-    <p>如果你正在读这篇东西，大概率说明有人把“模型能跑”和几公斤硬件真的开始运动之间那一层交给你了。祝你好运。这部分通常不怎么光鲜，偶尔有点吓人，而且很多基础设施 bug 在日志证明真相之前，看起来都很像模型坏了。</p>
-    <p>这篇指南只保留能跨模型、跨机器人复用的工程方法：恢复训练合同，先建立不加技巧的基线，测量时序，只加入能解释的动作处理，并保留足够的数据 lineage，让每一条实际执行的动作都能被追溯。</p>
-    <p>如果你对时序、动作语义、录制格式、安全所有权或机器人接入做了重大修改，请在同一次变更里更新这篇指南。下一个工程师应该继承你的推理过程，而不是翻 terminal history 做系统考古。</p>
+    <p>如果你在读这篇文章，大概率有人把机器人工程里“模型检查点（checkpoint）能加载”到“几公斤硬件真的把事情做对”之间的那段活交给了你。祝你好运。这一层不性感，但它决定了策略能不能复现、能不能排错，以及是否已经可靠到值得上机测试。</p>
+    <p>这份指南从控制闭环出发，由内向外解释整条部署链路。它假设你有一些具身智能基础，但不要求你熟悉某个特定模型、机器人、中间件或实验室代码库。</p>
+    <p>如果你对时序、动作语义、数据记录、安全归属或机器人集成做了重大改动，请在同一笔变更里更新这份指南。下一位工程师应该继承你的推理过程，而不是在终端历史里做考古。</p>
   </div>
 </header>
 
+<section id="loop">
+  <div class="col">
+    <h2>先看控制闭环，再看检查点</h2>
+    <p>学习型机器人策略是闭环里的一个组件。运行时读取一次观测——通常是相机图像加上机器人状态——把它映射成模型要求的输入格式，让策略给出一个或多个未来动作，执行其中一部分预测，然后再观测。</p>
+    <p>很多现代策略预测的是一个<em>动作块（action chunk）</em>：一小段未来的关节、位姿或夹爪指令。控制回路以固定频率逐条执行。部署基础设施负责神经网络之外的一切：同步、队列、动作选择、安全检查、硬件下发，以及能够回答“机器人究竟执行了什么”的记录。</p>
+  </div>
+  <div class="chain loop wide" aria-label="闭环策略执行流程">
+    <div><b>观测</b>图像 + 机器人状态</div>
+    <div><b>适配</b>键名、单位、顺序</div>
+    <div><b>推理</b>预测一个动作块</div>
+    <div><b>执行</b>消费有效动作</div>
+    <div><b>闭环</b>读取新鲜反馈</div>
+  </div>
+</section>
+
 <section id="contract">
   <div class="col">
-    <h2>数据集也是运行时规格的一部分</h2>
-    <p>模型能返回有限值 tensor，并不能证明多少事情。两个 policy 都可能接收三张图像和一组状态，却对相机角色、RGB/BGR、字段顺序、单位、prompt 写法、时间戳，以及动作是绝对值还是增量有完全不同的理解。</p>
-    <p>把这些假设写成可执行的 contract。至少需要声明 observation key、shape、单位、相机角色、控制频率、action horizon、动作语义、任务词表和 normalization 资产。</p>
+    <h2>部署的本质是重建训练时的契约</h2>
+    <p>模型是在一组特定假设下学出来的。两个策略可能都接收三张图像和一个状态向量，却在相机角色、RGB 还是 BGR、字段顺序、单位、提示词措辞、时间戳、动作是绝对还是相对这些问题上完全不同。一个有限的输出张量只能证明代码跑通了，别的什么都证明不了。</p>
+    <p>把这些假设写成一份机器可读的运行时契约（runtime contract）。它应该声明观测键名和形状、单位、相机角色、控制频率、动作预测长度和语义、任务词表、预处理方式以及归一化参数。数据集和训练变换通常是这份契约最可靠的证据来源。</p>
     <div class="note blue">
-      <span class="label">工作原则</span>
-      <p>当文档、runtime 默认值和录制数据互相矛盾时，先检查数据和准确的训练 transform，再决定是否修改机器人 runtime。</p>
+      <span class="label">工作准则</span>
+      <p>当文档、运行时默认值和录制数据互相矛盾时，先检查成功的训练片段和确切的变换代码，再动运行时。</p>
     </div>
   </div>
 </section>
 
 <section id="baseline">
   <div class="col">
-    <h2>先让不加技巧的原始策略真正动起来</h2>
-    <p>先证明最短路径：新鲜 observation 进入 adapter，服务返回有限动作，动作语义正确，并且一条受监督命令到达预期 actuator。会抖但方向正确，是有价值的基线；非常平滑地驱动错误关节，不是。</p>
-    <p>不要一开始就加入 RTC、filter、spline、自动重试或放宽限制。每多一个机制，证据就多一层变化。只有理解原始 policy path 之后，才逐项加入。</p>
+    <h2>先让朴素策略跑通，再让它变顺滑</h2>
+    <p>第一步是证明最短路径可行：一次新鲜观测进入适配器，服务返回有限的动作，动作含义正确，一条受监督的指令到达预期的执行器。方向正确但动作抖动的基线是有用的。相机接错了、或者指令发到了错误的关节上，就算动作再顺滑也没用。</p>
+    <p>不要一上来就搞异步调度、滤波器、样条、自动重试或放宽限位。每加一个机制都会改变证据。等未经修改的策略路径跑通之后，再一个一个加。</p>
     <ol>
-      <li>验证相机身份、颜色、方向、分辨率和频率。</li>
-      <li>通过真实物理运动验证 state 顺序和单位。</li>
-      <li>验证 action 顺序、单位以及 absolute/delta 语义。</li>
+      <li>确认相机身份、颜色、方向、分辨率和帧率。</li>
+      <li>对照一次物理运动，确认状态顺序和单位。</li>
+      <li>确认动作顺序、单位，以及绝对/增量语义。</li>
       <li>测量原始动作幅度和推理延迟。</li>
-      <li>执行一次有人监督、范围受限的硬件 canary。</li>
+      <li>做一次有人监督、范围受限的小规模真机验证。</li>
     </ol>
   </div>
 </section>
 
 <section id="architecture">
   <div class="col">
-    <h2>把策略计算和硬件所有权分开</h2>
-    <p>模型服务可以被替换、重启，甚至移动到另一台机器；硬件 writer 不应该随之变化。模型动作和专家动作都只是候选值，router 选择其一，最终安全边界负责验证，最后只能由一个 owner 下发命令。</p>
+    <h2>把可替换的计算和硬件控制权分开</h2>
+    <p>适配器把机器人观测转换成策略要求的输入格式。这样一来，策略服务可以替换、重启，甚至迁移到另一台机器，而不需要改动机器人驱动。模型输出仍然只是候选动作：路由器在模型、人类和保持指令之间做选择；最终安全检查负责验收；整个系统只能有一个进程持有硬件 SDK 并发送命令。</p>
+    <p>这种拆分让每类故障都有明确归属：格式错误查适配器，模型延迟查服务边界，动作仲裁查路由器，设备状态查硬件控制进程。</p>
   </div>
   <figure class="diagram wide">
-    <figcaption><b>一条 observation path，一条 action lineage，一个硬件 writer</b>最关键的边界不是通信协议，而是动作语义在哪里被验证，以及硬件所有权在哪里变成唯一。</figcaption>
+    <figcaption><b>一条观测路径，一条动作来源链路，一个硬件写入者</b>WebSocket、共享内存或其他方式都能传递消息。真正重要的是两件事：在哪一层检查消息含义，从哪一层开始只允许一个进程写入硬件。</figcaption>
     <div class="canvas">
-      <svg viewBox="0 0 900 330" role="img" aria-label="通用真机部署基础设施">
+      <svg viewBox="0 0 900 330" role="img" aria-label="通用真机部署架构图">
         <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8b9097"/></marker></defs>
         <g fill="none" stroke="#8b9097" stroke-width="1.5" marker-end="url(#arrow)">
           <path d="M150 78H262"/><path d="M392 78H504"/><path d="M634 78H748"/>
@@ -172,12 +190,12 @@ td:first-child{color:var(--ink);font-weight:620}
           <rect x="168" y="205" width="130" height="70" rx="5"/><rect x="35" y="205" width="100" height="70" rx="5"/>
         </g>
         <g text-anchor="middle" fill="#292a2d" font-size="13" font-weight="650">
-          <text x="92" y="73">传感器</text><text x="327" y="73">Adapter</text><text x="569" y="73">策略服务</text><text x="806" y="73">Action chunk</text>
-          <text x="707" y="235">Router</text><text x="470" y="235">最终安全</text><text x="233" y="235">唯一 owner</text><text x="85" y="235">机器人</text>
+          <text x="92" y="73">传感器</text><text x="327" y="73">适配器</text><text x="569" y="73">策略服务</text><text x="806" y="73">动作块</text>
+          <text x="707" y="235">路由器</text><text x="470" y="235">安全检查</text><text x="233" y="235">硬件进程</text><text x="85" y="235">机器人</text>
         </g>
         <g text-anchor="middle" fill="#777c83" font-size="10.5">
-          <text x="92" y="91">图像 + 状态</text><text x="327" y="91">contract 映射</text><text x="569" y="91">可替换计算</text><text x="806" y="91">定时队列</text>
-          <text x="707" y="253">MODEL / EXPERT / HOLD</text><text x="470" y="253">新鲜度 + 限制</text><text x="233" y="253">SDK 下发</text><text x="85" y="253">反馈</text>
+          <text x="92" y="91">图像 + 状态</text><text x="327" y="91">契约映射</text><text x="569" y="91">可替换计算</text><text x="806" y="91">定时队列</text>
+          <text x="707" y="253">模型 / 专家 / 保持</text><text x="470" y="253">新鲜度 + 限位</text><text x="233" y="253">SDK 下发</text><text x="85" y="253">反馈</text>
         </g>
       </svg>
     </div>
@@ -186,73 +204,73 @@ td:first-child{color:var(--ink);font-weight:620}
 
 <section id="rtc">
   <div class="col">
-    <h2>异步推理必须处理已经过去的动作</h2>
-    <p>推理和控制运行在不同的时钟上。请求在途期间，机器人仍会继续消费当前队列中的动作。新回复到达时，它最前面的几行其实描述的是已经过去的时刻。</p>
-    <p>通用处理方式很简单：在队列耗尽之前发起请求，测量期间经过了多少个 control step，从新回复中丢掉同样数量的行，只安装仍属于未来的部分。接缝处可以选择做一个很短的 blend；时间对齐不能省略。</p>
-    <p>触发时机应来自用 control step 表示的实测延迟，并保留少量 margin。模型、计算设备、图像链路、compiler 或网络变化之后，都需要重新测量。</p>
+    <h2>异步推理首先是时序问题，其次才是融合问题</h2>
+    <p>同步执行时，机器人可能把当前动作块耗尽后停下来，等下一个动作块生成。异步推理通过提前请求下一个动作块、让控制从现有队列继续运行来避免这种停顿。</p>
+    <p>但回复是基于更早的观测。如果推理花了好几个控制周期，预测的前几个动作对应的其实是已经过去的时间。测量端到端延迟（以控制周期为单位），丢掉已经过期的前缀，只保留仍然属于未来的动作。一段短融合可以软化交接处的跳变，但它修不了错误的时间对齐。</p>
+    <p>当模型、加速器、图像路径、编译器或网络发生变化时，重新测量延迟。更广泛的文献比较了多种融合和训练期替代方案；这里的运行时基线刻意收窄为：预取、对齐，然后可选地融合。</p>
   </div>
   <figure class="diagram wide">
-    <figcaption><b>RTC 的三个阶段</b>动画刻意省略了具体 preserve 数量和 blend curve；这些都是在时间对齐正确之后才需要讨论的调参项。</figcaption>
-    <div class="canvas"><svg id="rtcSvg" viewBox="0 0 900 245" role="img" aria-label="简化实时 chunking 动画"></svg></div>
-    <div class="rtc-status"><span id="rtcText">1 · 在队列耗尽前请求下一段 chunk。</span><button id="rtcReplay" type="button">重播</button></div>
+    <figcaption><b>异步交接分三步</b>动画省略了不同模型使用的队列长度和融合曲线；这些参数只有在时间对齐正确之后才值得调整。</figcaption>
+    <div class="canvas"><svg id="rtcSvg" viewBox="0 0 900 245" role="img" aria-label="简化实时动作块动画"></svg></div>
+    <div class="rtc-status"><span id="rtcText">1 · 在队列耗尽前请求下一个动作块。</span><button id="rtcReplay" type="button">重播</button></div>
   </figure>
   <div class="col note amber">
-    <span class="label">不要混在一起</span>
-    <p>异步推理解决控制阻塞；alignment 删除执行时刻已经过去的动作；seam blend 减小两段有效未来动作之间的不连续。它们是三个不同问题。</p>
+    <span class="label">三件独立的事</span>
+    <p>预取防止计算停顿。对齐移除针对已过去时间的预测。接缝融合减少两条有效未来轨迹之间的跳变。把它们当成一个功能来做，时序 bug 就很难看清。</p>
   </div>
 </section>
 
 <section id="motion">
   <div class="col">
-    <h2>根据实测问题选择动作处理</h2>
-    <p>“让它更平滑”不是诊断。加入 processor 之前，先把原始逐步关节变化和 chunk 接缝跳变与训练数据比较。</p>
+    <h2>先看抖动发生在哪里，再决定用什么平滑方法</h2>
+    <p>“机器人很抖”是一个观察，不是一个诊断。把原始指令流和反馈流画出来。判断不连续是发生在动作块内部、只发生在动作块边界，还是因为请求的运动超出了控制器能跟踪的范围。然后拿同样的统计量和演示数据做对比。</p>
     <div class="table">
       <table>
-        <thead><tr><th>观察到的问题</th><th>适合的工具</th><th>主要风险</th></tr></thead>
+        <thead><tr><th>观察到的现象</th><th>合适的工具</th><th>主要风险</th></tr></thead>
         <tbody>
-          <tr><td>只有新 chunk 到达时发生跳变</td><td>先做 RTC alignment，再做短 seam blend</td><td>blend 太长会让每次 replan 都变迟钝。</td></tr>
-          <tr><td>一个有效 chunk 内部存在高频噪声</td><td>因果 low-pass filter</td><td>过滤过强会增加延迟，也可能无法按时到达目标。</td></tr>
-          <tr><td>固定执行时间内只有稀疏 waypoint</td><td>Spline 或带时间参数的插值</td><td>插值可能 overshoot，不适合频繁重新规划的命令。</td></tr>
-          <tr><td>单步或速度在物理上不可实现</td><td>带 telemetry 的明确 rate/velocity limit</td><td>长期频繁 clipping 会掩盖 contract 或 policy 问题。</td></tr>
+          <tr><td>只有新动作块到达时才跳变</td><td>先做时间对齐，再加短接缝融合</td><td>融合过度会让每次重规划都变得迟钝。</td></tr>
+          <tr><td>有效动作块内部的高频噪声</td><td>因果低通滤波器</td><td>滤波太多会引入滞后，可能导致无法按时到达目标。</td></tr>
+          <tr><td>稀疏路点配固定遍历时间</td><td>样条或时间参数化插值</td><td>插值可能过冲，也不适合快速重规划的指令流。</td></tr>
+          <tr><td>物理上不可能的步长或速度</td><td>显式速率/速度限制加遥测</td><td>频繁截断会掩盖契约或策略本身的问题。</td></tr>
         </tbody>
       </table>
     </div>
-    <p>Low-pass filter 通常需要跨 chunk 保留状态，并作用于 router 已选择的模型流、最终 dispatch 之前。除非过滤本身属于采集合同，否则不要过滤专家接管动作。</p>
+    <p>因果低通滤波器通常应该跨动作块边界保持状态，并且在最终下发之前作用于选中的模型输出流。它不应该悄悄改动专家接管数据——除非滤波本身就是采集契约的一部分。</p>
   </div>
 </section>
 
 <section id="initial">
   <div class="col">
-    <h2>初始位姿属于数据分布</h2>
-    <p>对人来说对称、方便的位姿，对 policy 可能是 OOD。应该从成功训练 episode 中采样 initial state；必要时先聚类，再选择有代表性且物理可达的状态。</p>
-    <p>记录选中状态、来源 episode、单位和容差。如果机器人无法安全到达它，应修复采集或 transition 流程，而不是凭感觉重新设计一个起始位姿。</p>
-    <div class="note blue"><span class="label">覆盖范围限制</span><p>代表性采样只能从已有覆盖里选择，无法创造 demonstration 从未包含过的起始状态。</p></div>
+    <h2>初始位姿是模型输入，不是舞台布景</h2>
+    <p>第一次观测已经在影响后续整段执行。一个在人看来对称或方便的位姿，可能远远偏离训练时见过的起始状态。从成功片段里采样初始状态，必要时先做聚类，再选择真机能够安全到达的代表性状态。</p>
+    <p>记录选中的状态、它的来源片段、单位和容差。如果机器人无法安全到达这个状态，去修采集流程或过渡流程，而不是凭眼睛发明一个新的起始位姿。</p>
+    <div class="note blue"><span class="label">覆盖范围的局限</span><p>代表性采样只能从已有覆盖里选，它造不出演示数据里从未出现过的起始状态。</p></div>
   </div>
 </section>
 
 <section id="dagger">
   <div class="col">
-    <h2>DAgger 采集必须保留原始控制合同</h2>
-    <p>只有 intervention 数据的时序和动作语义与模型需要学习的东西一致，纠正数据才有用。更慢的操作员、不同的 control rate，或者更小的旋转增量，都可能训练出动作犹豫的 policy——即使每个标签在格式上都是合法的。</p>
-    <p>把 expert 和原训练数据的逐步关节变化、速度、夹爪范围、命令频率和 observation age 分布放在一起比较。这就是某一次 yaw-speed 问题背后的通用结论：纠正动作流发生了 distribution shift。</p>
-    <h3>先完整记录 lineage，再派生训练视图</h3>
-    <p>保持原始 episode 不可变，并在每一步记录 model proposal、expert proposal、selected source、executed action、control mode 和 takeover event。之后可以稳定地派生 expert-only window 或混合训练视图，同时保留上下文。</p>
+    <h2>DAgger 应该修正策略，而不是改变任务</h2>
+    <p>在基于干预的 DAgger 里，策略会访问由它自己的错误产生的状态，人类在需要时接管，这些修正成为新的训练数据。重点是把有用的标签加到部署策略真正失败的地方——而不是造出第二个互不兼容的控制域。</p>
+    <p>修正数据只有在时序和动作含义与原始训练契约一致时才有用。更慢的遥操作、不同的控制频率，或者更小的指令增量，即使每一行都合法，也可能让微调后的策略动作偏小、反应迟疑。训练之前，应对比专家数据和原数据在单步变化量、速度、夹爪行程、指令节奏和观测延迟上的分布。</p>
+    <h3>先记录动作来源，再派生训练视图</h3>
+    <p>把原始片段保持为不可变，并在每一步标注：模型提议、专家提议、选中来源、实际执行动作、控制模式和接管事件。训练时就可以只选专家窗口、加入前置上下文、或者构建混合视图，而不需要猜测当时发生了什么。</p>
   </div>
-  <div class="chain wide" aria-label="DAgger 动作 lineage">
-    <div><b>模型候选动作</b>policy 想执行什么</div>
-    <div><b>专家候选动作</b>操作员想执行什么</div>
-    <div><b>Router 决策</b>MODEL / EXPERT / HOLD</div>
-    <div><b>安全输出</b>通过检查的命令</div>
-    <div><b>实际执行动作</b>硬件真正收到什么</div>
-    <div><b>训练视图</b>可复现的数据投影</div>
+  <div class="chain wide" aria-label="DAgger 动作来源链路">
+    <div><b>模型提议</b>策略想要什么</div>
+    <div><b>专家提议</b>操作员想要什么</div>
+    <div><b>路由器决策</b>模型 / 专家 / 保持</div>
+    <div><b>安全输出</b>被接受的指令</div>
+    <div><b>实际执行</b>硬件收到了什么</div>
+    <div><b>训练视图</b>可复现的投影</div>
   </div>
-  <div class="col note amber"><span class="label">常见录制错误</span><p>把原始 RGB frame 直接写进 columnar 文件，会让不大的采集变得异常巨大。数值状态、动作、标签和 frame index 存 Parquet；相机流编码成 video，并保留时间戳映射。</p></div>
+  <div class="col note amber"><span class="label">常见的录制坑</span><p>把原始 RGB 帧直接存进列式文件，会让一个不大的数据集变得巨大。数值状态、动作、标签和帧索引存 Parquet；相机流编码成视频，保留时间戳映射。</p></div>
 </section>
 
 <section id="onboarding">
   <div class="col">
-    <h2>新 checkpoint 应该只需要 descriptor，而不是新的 launcher 分支</h2>
-    <p>Deployment descriptor 位于模型 bundle 和 launcher 之间。它不包含模型，也不执行推理；它告诉系统哪一个已验证 bundle、contract、server、graph、camera profile、task catalog 和 qualification 流程应该绑定在一起。</p>
+    <h2>描述一次部署，而不是硬编码一次部署</h2>
+    <p>模型包包含权重，以及正确解释这些权重所需的配套文件。部署描述文件（deployment descriptor）是一份很小的配置：它把不可变的模型包绑定到运行时契约，说明由哪个服务加载、由哪张运行图接入控制链路、使用哪套相机配置，以及上线前必须通过哪些检查。启动器只读取描述文件，不应该为每个 checkpoint 再增加一条专属分支。</p>
 <pre>schema: deployment/v1
 name: example-policy
 
@@ -275,39 +293,40 @@ runtime:
 
 qualification:
   tests: [contract, adapter, service, no_write_launch]</pre>
-    <p>对于已有 backend 能支持的 checkpoint，接入过程就变成填写配置并产出证据，而不是再增加一个 <code>if model == ...</code> 分支。同一份 descriptor 驱动 intake、qualification、launch 和 rollback。</p>
-    <h3>把发布包身份和本地 intake 证据分开</h3>
+    <p>对于已经支持的后端，接入新模型就变成了“填写配置、产出验证证据”，而不是再写一个 <code>if model == ...</code> 分支。同一份描述文件驱动下载校验、运行时准备、部署前验证、启动和回滚。</p>
+    <h3>校验发布的是什么，到达的又是什么</h3>
     <ul>
-      <li><b>Publisher manifest：</b>随 bundle 发布的文件路径、大小和 hash 清单。</li>
-      <li><b>Local manifest：</b>下载器生成的结构化收据，包含对象路径、大小、来源 metadata 和本地计算 hash。</li>
-      <li><b>Local hash：</b>针对本地实际内容重新计算的指纹，通常也写成扁平的 <code>SHA256SUMS</code>。</li>
+      <li><b>发布方清单：</b>随包发布的文件列表、大小和哈希。</li>
+      <li><b>本地清单：</b>下载器生成的结构化回执，包含对象路径、大小、来源元数据和计算出的哈希。</li>
+      <li><b>本地哈希：</b>重新计算的内容指纹，通常也写成一个扁平的 <code>SHA256SUMS</code> 文件。</li>
     </ul>
-    <p>三者需要互相核对。下载完整的文件仍可能是错误 checkpoint，而名字正确的 checkpoint 也可能有一个文件已经损坏。</p>
+    <p>加载模型之前，三者交叉核对。下载完整也可能是错误的 checkpoint；目录名正确也可能里面有一个损坏的文件。</p>
   </div>
 </section>
 
 <section id="debugging">
   <div class="col">
-    <h2>沿着第一处断裂的边界排查</h2>
-    <p>不要从最终视觉症状开始调参。让一条 observation 和一条 action 穿过整个系统，找出数值第一次不再满足合同的位置。</p>
+    <h2>找到最先出错的那一层</h2>
+    <p>不要从最终的视觉症状开始查。给一次观测和一个动作加上追踪标识，跟着它们穿过系统，找到第一个值、时间戳或归属不再满足契约的边界。</p>
     <ol>
-      <li>模型实际收到了什么 observation？</li>
-      <li>模型返回了什么原始 action chunk？</li>
-      <li>时序和动作处理生成了什么？</li>
-      <li>Router 和最终安全边界接受了什么？</li>
-      <li>硬件实际收到了什么，又回报了什么？</li>
+      <li>模型实际收到的是什么观测？</li>
+      <li>它返回的原始动作块是什么？</li>
+      <li>时序和运动处理之后产出了什么？</li>
+      <li>路由器和最终安全边界接受了什么？</li>
+      <li>硬件收到了什么，又上报了什么？</li>
     </ol>
-    <p>大部分部署争论，都是因为有人从第一个问题直接跳到了第五个。</p>
-    <div class="note blue"><span class="label">反复出现的答案</span><p>系统开始变得玄学时，回到数据集和训练 transform。相机角色、单位、动作幅度、频率、初始位姿和任务语言，通常都能在那里得到比 runtime workaround 更可靠的答案。</p></div>
+    <p>大多数部署争论之所以发生，是因为排查从“模型应该看到什么”直接跳到了“机器人看起来做了什么”。</p>
+    <div class="note blue"><span class="label">反复出现的答案</span><p>当系统变得神秘时，回到数据集和训练变换。它们通常比再打一个运行时补丁更快地解决相机角色、单位、动作尺度、节奏、起始位姿和任务语言的问题。</p></div>
   </div>
 </section>
 
-
 <footer class="end col">
-  <h2>让这篇指南保持可用</h2>
-  <p>架构改变时，文档也应该改变。记录修改原因、测量到的失败、新 contract，以及证明修复有效的证据。只有下一个工程师仍然敢相信它时，field guide 才有价值。</p>
+  <h2>让这份指南活下去</h2>
+  <p>架构变了，这份文档就应该跟着变。记录原因、实测到的故障、新的契约，以及修复有效的证据。一份实战指南只有在下一个工程师还能信任它的时候才有用。</p>
+  <p>想进一步比较不同的异步动作块策略，可以阅读 <a href="https://www.motubrain.com/zh/research/beyond-stalls-deploying-world-action-models/">Motubrain 的部署笔记</a>和配套的 <a href="https://arxiv.org/abs/2608.01880">技术报告</a>。</p>
 </footer>
 </main>
+
 </div>
 
 <script>
@@ -321,7 +340,7 @@ qualification:
   if("IntersectionObserver" in window){var io=new IntersectionObserver(function(es){var v=es.filter(function(e){return e.isIntersecting}).sort(function(a,b){return b.intersectionRatio-a.intersectionRatio});if(!v.length)return;links.forEach(function(a){a.classList.toggle("active",a.getAttribute("href")==="#"+v[0].target.id)})},{rootMargin:"-18% 0px -65% 0px",threshold:[0,.1,.35]});document.querySelectorAll("main section[id]").forEach(function(n){io.observe(n)})}
 
   var svg=document.getElementById("rtcSvg"),status=document.getElementById("rtcText"),replay=document.getElementById("rtcReplay"),phase=0,timer;
-  var copy=["1 · 在队列耗尽前请求下一段 chunk。","2 · 推理在途期间，控制继续消费旧队列。","3 · 丢弃已经过去的行，只安装未来动作。"];
+  var copy=["1 · 在队列耗尽前请求下一个动作块。","2 · 推理期间，机器人继续执行旧队列。","3 · 丢掉过期前缀，只接收未来动作。"];
   function rect(x,y,w,h,fill,stroke){return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="3" fill="'+fill+'" stroke="'+stroke+'"/>'}
   function draw(){
     if(!svg)return;var out='<text x="24" y="30" fill="#292a2d" font-size="14" font-weight="650">当前执行队列</text>';
@@ -329,8 +348,8 @@ qualification:
     out+='<text x="24" y="128" fill="#292a2d" font-size="14" font-weight="650">新的模型回复</text>';
     for(var j=0;j<10;j++){var f="#fff",s="#cac9c3";if(phase===2&&j<3){f="#f4d9d7";s="#ad413b"}else if(phase===2){f="#d2eadf";s="#14745f"}out+=rect(158+j*67,146,54,38,f,s)+'<text x="'+(185+j*67)+'" y="170" text-anchor="middle" fill="#666b72" font-size="10">'+j+'</text>'}
     if(phase===0)out+='<path d="M420 94V135" stroke="#2764c5" stroke-width="2"/><text x="432" y="119" fill="#2764c5" font-size="11">发起请求</text>';
-    if(phase===1)out+='<text x="308" y="111" fill="#2764c5" font-size="11">推理延迟会消耗 control step</text>';
-    if(phase===2)out+='<path d="M172 198H345" stroke="#ad413b" stroke-width="2"/><text x="258" y="219" text-anchor="middle" fill="#ad413b" font-size="11">丢弃已经过去的行</text><path d="M374 198H814" stroke="#14745f" stroke-width="2"/><text x="594" y="219" text-anchor="middle" fill="#14745f" font-size="11">接受仍属于未来的行</text>';
+    if(phase===1)out+='<text x="308" y="111" fill="#2764c5" font-size="11">推理期间，旧队列仍在向前执行</text>';
+    if(phase===2)out+='<path d="M172 198H345" stroke="#ad413b" stroke-width="2"/><text x="258" y="219" text-anchor="middle" fill="#ad413b" font-size="11">丢掉过期前缀</text><path d="M374 198H814" stroke="#14745f" stroke-width="2"/><text x="594" y="219" text-anchor="middle" fill="#14745f" font-size="11">接收仍然有效的未来动作</text>';
     svg.innerHTML=out;if(status)status.textContent=copy[phase];
   }
   function start(){clearInterval(timer);phase=0;draw();if(!window.matchMedia("(prefers-reduced-motion: reduce)").matches)timer=setInterval(function(){phase=(phase+1)%3;draw()},1700);else{phase=2;draw()}}

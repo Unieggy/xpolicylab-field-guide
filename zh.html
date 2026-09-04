@@ -151,6 +151,11 @@ svg text{font-family:var(--sans)}
 .legend i{display:inline-block;width:10px;height:10px;margin-right:10px;border:1px solid rgba(0,0,0,.2);border-radius:2px;transform:translateY(1px);text-indent:0}
 .legend b{color:var(--ink)}
 .legend code{font-size:.9em;padding:0 3px}
+.curve-legend>span{padding-left:38px;text-indent:-38px}
+.curve-legend i{width:28px;height:0;margin-right:10px;border:0;border-top:3px solid;border-radius:0;transform:translateY(-2px)}
+.curve-legend i.linear{border-top-color:#d55e00;border-top-style:dashed}
+.curve-legend i.cubic{border-top-color:#0072b2;border-top-style:dotted}
+.curve-legend i.quintic{border-top-color:#009e73;border-top-style:solid}
 
 .controls{display:flex;flex-wrap:wrap;gap:14px 28px;margin-bottom:26px;font-size:11px}
 .controls label{display:grid;gap:6px;color:var(--muted)}
@@ -158,6 +163,11 @@ svg text{font-family:var(--sans)}
 .controls .cap b{color:var(--ink);font:650 11.5px var(--mono);letter-spacing:0}
 .controls input[type=range]{width:126px;accent-color:var(--blue)}
 .controls select{padding:3px 6px;border:1px solid var(--line2);border-radius:4px;background:#fff;color:var(--ink);font:11.5px var(--sans)}
+.controls button{align-self:end;padding:7px 10px;border:1px solid var(--line2);border-radius:5px;background:#fff;color:var(--ink);font:650 11px var(--sans);cursor:pointer}
+.controls button:hover{border-color:var(--blue);color:var(--blue)}
+.curve-formula{margin:0 0 20px;padding:19px 21px;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2);font-family:var(--mono)}
+.curve-formula>b{display:block;margin-bottom:10px;color:var(--ink);font-size:.94rem;line-height:1.55}
+.curve-formula span{display:block;color:var(--muted);font:12px/1.65 var(--sans)}
 .readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(136px,1fr));gap:16px 26px;
   margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}
 .readout>div{color:var(--muted);font-size:11.2px;line-height:1.45}
@@ -716,6 +726,37 @@ units = ("rad",)*6 + ("m",) + ("rad",)*6 + ("m",)</pre>
     </ul>
 
     <p>未滤波的目标先过一次检查，滤波后的目标在硬件控制进程写 SDK 之前再过一次最终安全门。滤波不是绕过那道门的方式。</p>
+  </div>
+
+  <div class="col">
+    <h3>固定时长的路点轨迹</h3>
+    <p>五次轨迹处理的问题和低通不同。它在两个固定端点之间生成一段时间参数化运动，并明确约束起点和终点的速度、加速度。在当前运行时里，它只用于 Prepare、Home 和从数据集采样的起始位姿过渡，不进入持续重规划的模型动作流。</p>
+  </div>
+
+  <figure class="wide diagram" id="curve-demo">
+    <figcaption><b>固定时长的路点插值。</b>选择一条曲线，重播归一化时间 <code>u=t/τ</code>。三个图分别显示位置、速度和加速度，解释为什么看起来相近的位置曲线，会在端点产生完全不同的运动状态。图中每条曲线都是一个时间缩放段；多路点样条需要串联多个曲线段，并让所需的边界导数连续。<span class="scroll-hint">横向滚动查看完整图表 →</span></figcaption>
+    <div class="controls">
+      <label><span class="cap">突出显示</span><select id="curveMode"><option value="compare" selected>全部对比</option><option value="linear">线性</option><option value="cubic">三次曲线</option><option value="quintic">五次最小加加速度</option></select></label>
+      <button id="curveReplay" type="button">重播时间指针</button>
+    </div>
+    <div class="curve-formula">
+      <b>q(t)=q₀+Δq·s(u), &nbsp; q̇(t)=Δq/τ·s′(u), &nbsp; q̈(t)=Δq/τ²·s″(u)</b>
+      <span id="curveEquation">五次曲线：s(u)=10u³−15u⁴+6u⁵</span>
+    </div>
+    <div class="diagram-canvas"><svg id="curveSvg" viewBox="0 0 900 375" role="img" aria-label="线性、三次和五次路点插值的动态对比"></svg></div>
+    <div class="legend curve-legend" id="curveLegend">
+      <span><i class="linear"></i>线性：只保证位置连续</span>
+      <span><i class="cubic"></i>三次：端点速度为零</span>
+      <span><i class="quintic"></i>五次：端点速度和加速度都为零</span>
+    </div>
+    <div class="readout" id="curveOut"></div>
+  </figure>
+
+  <div class="col">
+    <div class="note blue">
+      <span class="label">同一条多项式，不是同一种操作</span>
+      <p>路点轨迹用 <code>s(u)</code> 在两个固定端点之间生成运动；RTC 接缝融合可以复用这条曲线作为权重，在两份已经完成时间对齐的计划之间过渡；低通滤波则是递归计算，并不承诺何时抵达目标。尤其不要在每次模型重规划时重启一段五次曲线：端点持续变化，名义上的平滑最终会变成跟踪滞后。</p>
+    </div>
   </div>
 </section>
 
@@ -1487,6 +1528,138 @@ qualification:
   ids.forEach(function (id) { document.getElementById(id).addEventListener("input", drawRtc); });
   mode.addEventListener("change", drawRtc);
   drawRtc();
+
+  var curveSvg = document.getElementById("curveSvg");
+  var curveMode = document.getElementById("curveMode");
+  var curveReplay = document.getElementById("curveReplay");
+  var curveEquation = document.getElementById("curveEquation");
+  var curveOut = document.getElementById("curveOut");
+  var curveFigure = document.getElementById("curve-demo");
+  if (curveSvg && curveMode && curveReplay) {
+    var curveDefs = {
+      linear: {
+        color: "#d55e00", dash: "9 6",
+        fn: function (u) { return [u, 1, 0]; },
+        equation: "线性：s(u)=u",
+        ends: "位置连续，但速度会从静止瞬间跳到 Δq/τ，并在终点瞬间回到零。",
+        use: "作为对照基线，或用于允许端点速度突变的运动。",
+        avoid: "要求平滑启停的硬件运动。"
+      },
+      cubic: {
+        color: "#0072b2", dash: "11 4 2 4",
+        fn: function (u) { return [3*u*u-2*u*u*u, 6*u-6*u*u, 6-12*u]; },
+        equation: "三次曲线：s(u)=3u²−2u³",
+        ends: "s′(0)=s′(1)=0，但 s″(0)=6、s″(1)=−6，端点加速度仍会跳变。",
+        use: "固定端点，而且只要求起止速度为零的过渡。",
+        avoid: "快速重规划，或要求端点加速度也为零的运动。"
+      },
+      quintic: {
+        color: "#009e73", dash: "",
+        fn: function (u) { return [10*u*u*u-15*u*u*u*u+6*u*u*u*u*u, 30*u*u-60*u*u*u+30*u*u*u*u, 60*u-180*u*u+120*u*u*u]; },
+        equation: "五次曲线：s(u)=10u³−15u⁴+6u⁵",
+        ends: "s′(0)=s′(1)=s″(0)=s″(1)=0。",
+        use: "固定时长的回零、准备动作或路点过渡，且速度和加速度都需要平滑。",
+        avoid: "在 τ 结束前仍会变化的目标；反复重启曲线会增加滞后。"
+      }
+    };
+    var curveRows = [
+      { label: "位置  s(u)", y: 20, h: 82, min: 0, max: 1 },
+      { label: "速度  s′(u)", y: 137, h: 82, min: 0, max: 2 },
+      { label: "加速度  s″(u)", y: 254, h: 82, min: -6, max: 6 }
+    ];
+    var curveKeys = ["linear", "cubic", "quintic"];
+    var curveDots = [], curveCursor = null, curveRaf = 0;
+    function curveY(row, value) { return row.y + row.h - (value - row.min) / (row.max - row.min) * row.h; }
+    function curvePath(key, rowIndex) {
+      var d = "", row = curveRows[rowIndex];
+      for (var i = 0; i <= 120; i++) {
+        var u = i / 120, x = 108 + u * 766, y = curveY(row, curveDefs[key].fn(u)[rowIndex]);
+        d += (i ? "L" : "M") + x.toFixed(2) + " " + y.toFixed(2);
+      }
+      return d;
+    }
+    function curveCard(title, copy) { return "<div><b>" + title + "</b>" + copy + "</div>"; }
+    function updateCurve(u) {
+      var x = 108 + u * 766;
+      if (curveCursor) { curveCursor.setAttribute("x1", x); curveCursor.setAttribute("x2", x); }
+      curveDots.forEach(function (dot) {
+        var row = curveRows[dot.row], value = curveDefs[dot.key].fn(u)[dot.row];
+        dot.node.setAttribute("cx", x);
+        dot.node.setAttribute("cy", curveY(row, value));
+      });
+    }
+    function drawCurves() {
+      while (curveSvg.firstChild) curveSvg.removeChild(curveSvg.firstChild);
+      curveDots = [];
+      curveRows.forEach(function (row, index) {
+        curveSvg.appendChild(el("text", { x: 0, y: row.y + 12, "font-size": 10, "font-weight": 700, fill: "#292a2d" }, row.label));
+        [0, .5, 1].forEach(function (p) {
+          var y = row.y + p * row.h;
+          curveSvg.appendChild(el("line", { x1: 108, y1: y, x2: 874, y2: y, stroke: p === 1 ? "#cfcec8" : "#e9e8e4", "stroke-width": 1 }));
+        });
+        curveSvg.appendChild(el("text", { x: 98, y: row.y + 5, "font-size": 9, fill: "#9ca2aa", "text-anchor": "end" }, String(row.max)));
+        curveSvg.appendChild(el("text", { x: 98, y: row.y + row.h + 3, "font-size": 9, fill: "#9ca2aa", "text-anchor": "end" }, String(row.min)));
+        curveKeys.forEach(function (key) {
+          var compare = curveMode.value === "compare", active = compare || curveMode.value === key;
+          curveSvg.appendChild(el("path", { d: curvePath(key, index), fill: "none", stroke: curveDefs[key].color, "stroke-width": active ? (compare ? 2.8 : 3.5) : 1.9, "stroke-dasharray": curveDefs[key].dash, opacity: active ? 1 : .55, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+        });
+      });
+      var linearActive = curveMode.value === "compare" || curveMode.value === "linear";
+      var velocityRow = curveRows[1], v0 = curveY(velocityRow, 0), v1 = curveY(velocityRow, 1);
+      [108, 874].forEach(function (x) {
+        curveSvg.appendChild(el("line", { x1: x, y1: v0, x2: x, y2: v1, stroke: curveDefs.linear.color, "stroke-width": 1.8, "stroke-dasharray": "5 4", opacity: linearActive ? 1 : .55 }));
+      });
+      [0, .25, .5, .75, 1].forEach(function (u) {
+        var x = 108 + u * 766;
+        curveSvg.appendChild(el("line", { x1: x, y1: 342, x2: x, y2: 347, stroke: "#cfcec8" }));
+        curveSvg.appendChild(el("text", { x: x, y: 361, "font-size": 9, fill: "#9ca2aa", "text-anchor": "middle" }, u.toFixed(2)));
+      });
+      curveSvg.appendChild(el("text", { x: 886, y: 361, "font-size": 10, "font-style": "italic", fill: "#73777e" }, "u"));
+      curveCursor = el("line", { x1: 108, y1: 15, x2: 108, y2: 337, stroke: "#292a2d", "stroke-width": 1, "stroke-dasharray": "3 4", opacity: .55 });
+      curveSvg.appendChild(curveCursor);
+      curveKeys.forEach(function (key) {
+        var active = curveMode.value === "compare" || curveMode.value === key;
+        curveRows.forEach(function (row, rowIndex) {
+          var dot = el("circle", { r: active ? 4.5 : 3, fill: curveDefs[key].color, opacity: active ? 1 : .6, stroke: "#fff", "stroke-width": 1.2 });
+          curveSvg.appendChild(dot);
+          curveDots.push({ key: key, row: rowIndex, node: dot });
+        });
+      });
+      var selected = curveMode.value;
+      if (selected === "compare") {
+        curveEquation.textContent = "线性：u  ·  三次：3u²−2u³  ·  五次：10u³−15u⁴+6u⁵";
+        curveOut.innerHTML = curveCard("端点差异", "线性曲线的速度会跳变；三次曲线把端点速度降到零；五次曲线进一步把端点加速度也降到零。") + curveCard("选择依据", "看速度和加速度约束，不要只看位置曲线是否顺眼。") + curveCard("不能替代", "RTC 时间对齐，或用于连续噪声的因果滤波器。");
+      } else {
+        var def = curveDefs[selected];
+        curveEquation.textContent = def.equation;
+        curveOut.innerHTML = curveCard("端点状态", def.ends) + curveCard("适合", def.use) + curveCard("不适合", def.avoid);
+      }
+      updateCurve(0);
+    }
+    function playCurve() {
+      cancelAnimationFrame(curveRaf);
+      var start = performance.now();
+      function frame(now) {
+        var u = Math.min(1, (now - start) / 2600);
+        updateCurve(u);
+        if (u < 1) curveRaf = requestAnimationFrame(frame);
+      }
+      curveRaf = requestAnimationFrame(frame);
+    }
+    curveMode.addEventListener("change", function () { drawCurves(); playCurve(); });
+    curveReplay.addEventListener("click", playCurve);
+    drawCurves();
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches && "IntersectionObserver" in window) {
+      var curveObserver = new IntersectionObserver(function (entries) {
+        if (entries.some(function (entry) { return entry.isIntersecting; })) { playCurve(); curveObserver.disconnect(); }
+      }, { threshold: .25 });
+      curveObserver.observe(curveFigure);
+    } else if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      playCurve();
+    } else {
+      updateCurve(.5);
+    }
+  }
 })();
 </script>
 </body>

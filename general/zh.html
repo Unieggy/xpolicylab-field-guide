@@ -55,8 +55,22 @@ figcaption b{display:block;margin-bottom:3px}
 .canvas{width:100%;overflow-x:auto;overscroll-behavior-inline:contain}
 .canvas svg{display:block;width:100%;min-width:760px;height:auto}
 svg text{font-family:var(--sans)}
-.rtc-status{display:flex;justify-content:space-between;gap:18px;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}
-.rtc-status b{font-family:var(--mono)}
+.controls{display:flex;flex-wrap:wrap;gap:14px 24px;margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid var(--line);font-size:11px}
+.controls label{display:grid;gap:6px;color:var(--muted)}
+.controls .cap{display:flex;justify-content:space-between;gap:12px;font-weight:650;letter-spacing:.045em;text-transform:uppercase}
+.controls .cap b{color:var(--ink);font:650 11.5px var(--mono);letter-spacing:0}
+.controls input[type=range]{width:126px;accent-color:var(--blue)}
+.controls select{padding:3px 6px;border:1px solid var(--line2);border-radius:4px;background:#fff;color:var(--ink);font:11.5px var(--sans)}
+.legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(245px,1fr));gap:7px 24px;margin-top:18px;padding-top:15px;border-top:1px solid var(--line);font-size:11.7px;line-height:1.45}
+.legend span{display:block;padding-left:19px;text-indent:-19px;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;margin-right:9px;border:1px solid rgba(0,0,0,.2);border-radius:2px;transform:translateY(1px);text-indent:0}
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px 22px;margin-top:19px;padding-top:15px;border-top:1px solid var(--line)}
+.readout>div{color:var(--muted);font-size:10.9px;line-height:1.4}
+.readout b{display:block;margin-bottom:3px;color:var(--ink);font:650 1.15rem/1.1 var(--mono)}
+.formula{margin:28px 0;padding:19px 21px;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2);font-family:var(--mono)}
+.formula>b{display:block;margin-bottom:10px;font-size:1.05rem}
+.formula span{display:block;color:var(--muted);font:12px/1.65 var(--sans)}
+.pipeline-order{margin:27px 0;color:var(--muted);font:650 12px/1.65 var(--mono)}
 button{padding:7px 10px;border:1px solid var(--line2);border-radius:5px;background:#fff;color:var(--ink);font:650 11px var(--sans);cursor:pointer}
 button:hover{border-color:var(--blue);color:var(--blue)}
 .table{margin:28px 0;overflow-x:auto}
@@ -107,7 +121,7 @@ td:first-child{color:var(--ink);font-weight:620}
     <a href="#architecture">运行时边界</a>
     <a href="#rtc">异步推理</a>
     <a href="#motion">动作处理</a>
-    <a href="#initial">初始状态</a>
+    <a href="#initial">从数据集采样</a>
     <a href="#dagger">DAgger 数据</a>
     <a href="#onboarding">模型接入</a>
     <a href="#debugging">故障定位</a>
@@ -206,17 +220,36 @@ td:first-child{color:var(--ink);font-weight:620}
   <div class="col">
     <h2>异步推理首先是时序问题，其次才是融合问题</h2>
     <p>同步执行时，机器人可能把当前动作块耗尽后停下来，等下一个动作块生成。异步推理通过提前请求下一个动作块、让控制从现有队列继续运行来避免这种停顿。</p>
-    <p>但回复是基于更早的观测。如果推理花了好几个控制周期，预测的前几个动作对应的其实是已经过去的时间。测量端到端延迟（以控制周期为单位），丢掉已经过期的前缀，只保留仍然属于未来的动作。一段短融合可以软化交接处的跳变，但它修不了错误的时间对齐。</p>
-    <p>当模型、加速器、图像路径、编译器或网络发生变化时，重新测量延迟。更广泛的文献比较了多种融合和训练期替代方案；这里的运行时基线刻意收窄为：预取、对齐，然后可选地融合。</p>
+    <p>模型可能一次预测 <code>H</code> 行，控制端却只把前 <code>E ≤ H</code> 行放进可执行队列。请求时机和队列余量必须按 <code>E</code> 计算，而不是按完整预测长度 <code>H</code> 计算：没有真正进入执行队列的尾部动作，不能算作延迟余量。</p>
+    <p>但回复基于更早的观测。如果推理花了几个控制周期，回复最前面的几行动作对应的时间已经过去。运行时需要在提交请求时记录执行计数器，统计请求在途期间消耗了多少行动作，再加上观测本身的年龄，最后从回复前面删掉这段已经失效的预测。</p>
+    <div class="formula">
+      <b>对齐偏移 c = 请求在途期间消耗的行数 + ceil(观测年龄 × 控制频率)</b>
+      <span>只有 <code>c &lt; T</code> 才接收回复，其中 <code>T</code> 是模型返回的预测长度。实际安装 <code>c … T−1</code>；如果所有行都已过期，就丢掉整份回复并立刻重新请求。</span>
+    </div>
+    <p>何时提前请求也应该由测量决定。把最近端到端延迟的高分位数换算成控制步数，再加一小段调度余量，在队列至少还剩这么多可执行动作时发出下一次请求。模型、加速器、图像传输、编译器或网络发生变化后，都要重新测量。</p>
+    <p><b>Preserve 和 transition 不是延迟估计。</b>Preserve 表示新回复到达后，仍有意保留几行有效的旧计划；transition 表示随后用多少行融合新旧目标。在 no-blend 模式下，系统仍然会提前推理并丢弃过期动作，只是不再平均两条未来轨迹，而是直接切换。</p>
+    <div class="formula">
+      <b>uᵢ = (i + 1)/(K + 1), &nbsp; wᵢ = 3uᵢ² − 2uᵢ³, &nbsp; aᵢ = (1 − wᵢ)aᵢ<sup>旧</sup> + wᵢaᵢ<sup>新</sup></b>
+      <span>一种常见做法是：先完成时间对齐，再用这条 smoothstep 曲线融合 <code>K</code> 行。前面的 <code>P</code> 行 preserve 区间完全沿用旧计划；进入 transition 后，权重才从旧计划单调过渡到新计划。曲线怎么选属于控制策略，不能代替真实延迟测量。</span>
+    </div>
   </div>
-  <figure class="diagram wide">
-    <figcaption><b>异步交接分三步</b>动画省略了不同模型使用的队列长度和融合曲线；这些参数只有在时间对齐正确之后才值得调整。</figcaption>
-    <div class="canvas"><svg id="rtcSvg" viewBox="0 0 900 245" role="img" aria-label="简化实时动作块动画"></svg></div>
-    <div class="rtc-status"><span id="rtcText">1 · 在队列耗尽前请求下一个动作块。</span><button id="rtcReplay" type="button">重播</button></div>
+  <figure class="diagram wide" id="rtc-demo">
+    <figcaption><b>一次完整的异步动作块交接</b>调整执行前缀、实测延迟和融合策略。每个格子代表一个控制步，颜色表示该时间位置最终由哪份计划负责。默认数值只用于讲解，不是部署建议。</figcaption>
+    <div class="controls">
+      <label><span class="cap">模式</span><select id="rtcMode"><option value="align">不融合</option><option value="blend" selected>融合</option></select></label>
+      <label><span class="cap">执行前缀 E <b id="vH">16</b></span><input id="rH" type="range" min="8" max="32" step="4" value="16"></label>
+      <label><span class="cap">控制频率 Hz <b id="vF">30</b></span><input id="rF" type="range" min="10" max="60" step="5" value="30"></label>
+      <label><span class="cap">实测延迟 ms <b id="vL">73</b></span><input id="rL" type="range" min="20" max="240" step="1" value="73"></label>
+      <label><span class="cap">Preserve <b id="vP">0</b></span><input id="rP" type="range" min="0" max="8" value="0"></label>
+      <label><span class="cap">Transition <b id="vT">4</b></span><input id="rT" type="range" min="0" max="8" value="4"></label>
+    </div>
+    <div class="canvas"><svg id="rtcSvg" viewBox="0 0 900 270" role="img" aria-label="经过时间对齐与接缝融合的交互示意图"></svg></div>
+    <div class="legend" id="rtcLegend"></div>
+    <div class="readout" id="rtcOut"></div>
   </figure>
   <div class="col note amber">
     <span class="label">三件独立的事</span>
-    <p>预取防止计算停顿。对齐移除针对已过去时间的预测。接缝融合减少两条有效未来轨迹之间的跳变。把它们当成一个功能来做，时序 bug 就很难看清。</p>
+    <p>提前请求避免算力等待造成停顿；时间对齐删除已经过期的预测；接缝融合只负责减小两条有效未来轨迹之间的跳变。还没对齐就开始融合，等于把属于不同时间的动作平均在一起，也会把真正的时序问题藏起来。</p>
   </div>
 </section>
 
@@ -235,15 +268,29 @@ td:first-child{color:var(--ink);font-weight:620}
         </tbody>
       </table>
     </div>
-    <p>因果低通滤波器通常应该跨动作块边界保持状态，并且在最终下发之前作用于选中的模型输出流。它不应该悄悄改动专家接管数据——除非滤波本身就是采集契约的一部分。</p>
+    <h3>低通滤波处理动作块内部的高频噪声</h3>
+    <div class="formula">
+      <b>yₜ = yₜ₋₁ + α(xₜ − yₜ₋₁), &nbsp; 0 &lt; α ≤ 1</b>
+      <span><code>xₜ</code> 是当前经过协调的目标，<code>yₜ</code> 是继续下发的指令。α 越小，高频变化压得越多，但相位滞后也越大。</span>
+    </div>
+    <p>普通的动作块切换不能重置滤波器，否则刚想消掉的接缝又会回来。episode 开始、人工接管、HOLD 或反馈中断之后，则应该用最新实测状态重新初始化。只过滤能容忍滞后的字段；夹爪开合通常应绕过低通，否则可能错过抓取时机。</p>
+    <p>固定目标不会永远被“削小”：连续更新会逐渐收敛到它。真正的问题是动作块有限，而且目标一直在变化；滤波过强时，控制指令可能始终落后于策略。α 不该靠肉眼选，而应测量指令与反馈之间的滞后。</p>
+    <h3>样条插值解决的是另一类问题</h3>
+    <p>当控制器拿到的是稀疏路点，而且移动时间明确时，可以使用三次、五次或 minimum-jerk 插值，例如 Prepare、Home，或者不同数据集起始位姿之间的过渡。样条会在已知端点之间生成稠密的位置和速度轨迹。它通常不适合快速重规划的模型输出，因为上一条曲线还没走完，新动作块就已经换了终点。</p>
+    <p>速度、加速度和单步变化限制仍然是最终安全边界，不是平滑器。如果它们频繁裁剪动作，就应该记录裁剪量并修正上游的动作尺度、频率或契约，而不是把长期被裁剪的轨迹当成正常运行。</p>
+    <p class="pipeline-order">经过时间对齐 → 可选接缝融合 → 因果低通 → 速率/安全检查 → 唯一硬件写入者</p>
   </div>
 </section>
 
 <section id="initial">
   <div class="col">
-    <h2>初始位姿是模型输入，不是舞台布景</h2>
-    <p>第一次观测已经在影响后续整段执行。一个在人看来对称或方便的位姿，可能远远偏离训练时见过的起始状态。从成功片段里采样初始状态，必要时先做聚类，再选择真机能够安全到达的代表性状态。</p>
-    <p>记录选中的状态、它的来源片段、单位和容差。如果机器人无法安全到达这个状态，去修采集流程或过渡流程，而不是凭眼睛发明一个新的起始位姿。</p>
+    <h2>从数据集里采样部署条件</h2>
+    <p>第一次观测已经在影响整段执行。一个在人看来对称或方便的位姿，可能偏离训练时见过的起始状态。相机安装、图像频率、任务措辞、夹爪范围和动作节奏也是一样：它们都属于模型学到的输入分布，不是部署现场可以随意调整的布景。</p>
+    <h3>选择完整记录下来的状态</h3>
+    <p>从成功训练 episode 构建起始状态库。候选帧应位于 episode 早期、持续运动开始之前；排除任务已经推进后的停顿和终止状态；然后对完整状态向量聚类，选取真实 medoid。不要分别计算每个关节的均值或中位数再拼成一个姿态——每个坐标都可能很常见，但它们的组合可能从未出现在任何示范里。</p>
+    <p>每个起始状态都应保留来源 episode、帧时间戳、完整状态、单位、相机快照、任务标签和可达性检查。用单独受约束的运动过程抵达它。如果某个采样状态无法安全到达，应修正过渡流程或补采覆盖，而不是凭感觉发明一个模型没见过的起点。</p>
+    <h3>用数据确定动作应有多大</h3>
+    <p>在增加滤波器或修改速率限制之前，先从训练 episode 计算每个关节的单步变化、速度、加速度和夹爪运动分布。用同一套统计量、在同一控制频率下比较原始策略输出和人工纠正。动作明显小于训练分布时，机器人会显得胆怯；明显大于训练分布时，大部分 rollout 都会撞在安全限制上。</p>
     <div class="note blue"><span class="label">覆盖范围的局限</span><p>代表性采样只能从已有覆盖里选，它造不出演示数据里从未出现过的起始状态。</p></div>
   </div>
 </section>
@@ -253,8 +300,10 @@ td:first-child{color:var(--ink);font-weight:620}
     <h2>DAgger 应该修正策略，而不是改变任务</h2>
     <p>在基于干预的 DAgger 里，策略会访问由它自己的错误产生的状态，人类在需要时接管，这些修正成为新的训练数据。重点是把有用的标签加到部署策略真正失败的地方——而不是造出第二个互不兼容的控制域。</p>
     <p>修正数据只有在时序和动作含义与原始训练契约一致时才有用。更慢的遥操作、不同的控制频率，或者更小的指令增量，即使每一行都合法，也可能让微调后的策略动作偏小、反应迟疑。训练之前，应对比专家数据和原数据在单步变化量、速度、夹爪行程、指令节奏和观测延迟上的分布。</p>
+    <p>接管发生时，应把专家设备和机器人当下的实测构型对齐，再从这个参考点传递相对运动。直接发送专家设备毫不相干的绝对位姿会造成跳变；未经数据对比就修改专家设备的增益或速度，则会改变下一轮训练标签的分布。</p>
     <h3>先记录动作来源，再派生训练视图</h3>
-    <p>把原始片段保持为不可变，并在每一步标注：模型提议、专家提议、选中来源、实际执行动作、控制模式和接管事件。训练时就可以只选专家窗口、加入前置上下文、或者构建混合视图，而不需要猜测当时发生了什么。</p>
+    <p>保留完整且不可变的原始 episode，并在每个控制步记录模型提议、对齐后的专家提议、选中来源、安全处理后的命令、实际执行动作、控制模式和接管事件。训练时就可以只选专家窗口、加入模型失败前的上下文，或者构建混合视图，而不必猜测当时发生了什么。</p>
+    <p>条件允许时，用硬件下发成功后分配的控制步 ID 关联各条数据流。最近时间戳关联可能跨过接管边界，也可能把一次有效性心跳贴到错误动作上。动作来源缺失或互相冲突的区间应该隔离，不能猜成有效标签。</p>
   </div>
   <div class="chain wide" aria-label="DAgger 动作来源链路">
     <div><b>模型提议</b>策略想要什么</div>
@@ -264,7 +313,7 @@ td:first-child{color:var(--ink);font-weight:620}
     <div><b>实际执行</b>硬件收到了什么</div>
     <div><b>训练视图</b>可复现的投影</div>
   </div>
-  <div class="col note amber"><span class="label">常见的录制坑</span><p>把原始 RGB 帧直接存进列式文件，会让一个不大的数据集变得巨大。数值状态、动作、标签和帧索引存 Parquet；相机流编码成视频，保留时间戳映射。</p></div>
+  <div class="col note amber"><span class="label">存储方式也是数据契约</span><p>把原始 RGB 数组直接存进列式文件，会让一个不大的数据集变得巨大。数值状态、动作、标签和帧索引存 Parquet；相机流编码成 H.264/HEVC 视频，并保留帧 → 时间戳 → 控制步的映射。</p></div>
 </section>
 
 <section id="onboarding">
@@ -339,21 +388,35 @@ qualification:
   document.addEventListener("keydown",function(e){if(e.key==="Escape")setNav(false)});
   if("IntersectionObserver" in window){var io=new IntersectionObserver(function(es){var v=es.filter(function(e){return e.isIntersecting}).sort(function(a,b){return b.intersectionRatio-a.intersectionRatio});if(!v.length)return;links.forEach(function(a){a.classList.toggle("active",a.getAttribute("href")==="#"+v[0].target.id)})},{rootMargin:"-18% 0px -65% 0px",threshold:[0,.1,.35]});document.querySelectorAll("main section[id]").forEach(function(n){io.observe(n)})}
 
-  var svg=document.getElementById("rtcSvg"),status=document.getElementById("rtcText"),replay=document.getElementById("rtcReplay"),phase=0,timer;
-  var copy=["1 · 在队列耗尽前请求下一个动作块。","2 · 推理期间，机器人继续执行旧队列。","3 · 丢掉过期前缀，只接收未来动作。"];
-  function rect(x,y,w,h,fill,stroke){return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="3" fill="'+fill+'" stroke="'+stroke+'"/>'}
-  function draw(){
-    if(!svg)return;var out='<text x="24" y="30" fill="#292a2d" font-size="14" font-weight="650">当前执行队列</text>';
-    for(var i=0;i<12;i++){var fill=i<4?"#ecece8":"#fff",stroke="#cac9c3";if(phase===1&&i>=4&&i<7){fill="#cfe0f7";stroke="#2764c5"}if(phase===2&&i>=7){fill="#d2eadf";stroke="#14745f"}out+=rect(24+i*67,48,54,38,fill,stroke)+'<text x="'+(51+i*67)+'" y="72" text-anchor="middle" fill="#666b72" font-size="10">'+i+'</text>'}
-    out+='<text x="24" y="128" fill="#292a2d" font-size="14" font-weight="650">新的模型回复</text>';
-    for(var j=0;j<10;j++){var f="#fff",s="#cac9c3";if(phase===2&&j<3){f="#f4d9d7";s="#ad413b"}else if(phase===2){f="#d2eadf";s="#14745f"}out+=rect(158+j*67,146,54,38,f,s)+'<text x="'+(185+j*67)+'" y="170" text-anchor="middle" fill="#666b72" font-size="10">'+j+'</text>'}
-    if(phase===0)out+='<path d="M420 94V135" stroke="#2764c5" stroke-width="2"/><text x="432" y="119" fill="#2764c5" font-size="11">发起请求</text>';
-    if(phase===1)out+='<text x="308" y="111" fill="#2764c5" font-size="11">推理期间，旧队列仍在向前执行</text>';
-    if(phase===2)out+='<path d="M172 198H345" stroke="#ad413b" stroke-width="2"/><text x="258" y="219" text-anchor="middle" fill="#ad413b" font-size="11">丢掉过期前缀</text><path d="M374 198H814" stroke="#14745f" stroke-width="2"/><text x="594" y="219" text-anchor="middle" fill="#14745f" font-size="11">接收仍然有效的未来动作</text>';
-    svg.innerHTML=out;if(status)status.textContent=copy[phase];
+  var NS="http://www.w3.org/2000/svg",svg=document.getElementById("rtcSvg");
+  if(!svg)return;
+  function el(name,attrs,copy){var n=document.createElementNS(NS,name);Object.keys(attrs).forEach(function(k){n.setAttribute(k,attrs[k])});if(copy!=null)n.textContent=copy;return n}
+  var C={done:"#ecece8",flight:"#cfe0f7",queued:"#fff",drop:"#f4d9d7",keep:"#f5e2bb",mix:"#ddd4f6",fresh:"#d2eadf"};
+  var S={done:"#b4b7b0",flight:"#2764c5",queued:"#cac9c3",drop:"#ad413b",keep:"#9a640b",mix:"#694bb8",fresh:"#14745f"};
+  [[C.done,S.done,"请求发出前已经执行的旧计划"],[C.flight,S.flight,"推理在途期间消耗的旧计划"],[C.queued,S.queued,"回复到达时仍在队列中的旧计划"],[C.drop,S.drop,"因过期而丢弃的新回复行"],[C.keep,S.keep,"有意保留的有效旧计划"],[C.mix,S.mix,"对齐后融合的新旧目标"],[C.fresh,S.fresh,"只使用新计划"]].forEach(function(row){var n=document.createElement("span");n.innerHTML='<i style="background:'+row[0]+';border-color:'+row[1]+'"></i>'+row[2];document.getElementById("rtcLegend").appendChild(n)});
+  var ids=["rH","rF","rL","rP","rT"],caps=["vH","vF","vL","vP","vT"],mode=document.getElementById("rtcMode"),readout=document.getElementById("rtcOut");
+  function cell(value,label,sub){return "<div><b>"+value+"</b>"+label+"<br>"+sub+"</div>"}
+  function drawRtc(){
+    var E=+document.getElementById("rH").value,f=+document.getElementById("rF").value,lat=+document.getElementById("rL").value,P=+document.getElementById("rP").value,T=+document.getElementById("rT").value,blend=mode.value==="blend";
+    ids.forEach(function(id,i){document.getElementById(caps[i]).textContent=document.getElementById(id).value});
+    var stepMs=1000/f,latSteps=Math.max(0,Math.ceil(lat/stepMs)),trigger=Math.min(E-1,latSteps+1+(blend?P+T:0)),before=Math.max(0,E-trigger),offset=Math.min(latSteps,E-1),accept=before+offset;
+    var preserved=blend?Math.min(P,Math.max(0,E-accept),Math.max(0,E-offset-1)):0;
+    var transition=blend?Math.min(T,Math.max(0,E-accept-preserved),Math.max(0,E-offset-preserved-1)):0;
+    while(svg.firstChild)svg.removeChild(svg.firstChild);
+    var L=106,R=900,total=before+E,cw=(R-L)/total,ch=22,yOld=48,yNew=136;
+    [[yOld,"旧计划","当前正在执行"],[yNew,"替换计划","按经过时间平移后"]].forEach(function(row){svg.appendChild(el("text",{x:0,y:row[0]-8,"font-size":10.5,"font-weight":700,fill:"#292a2d"},row[1]));svg.appendChild(el("text",{x:0,y:row[0]+9,"font-size":9.5,fill:"#9ca2aa"},row[2]))});
+    var i,x,fill,stroke;
+    for(i=0;i<E;i++){x=L+i*cw;if(i<before){fill=C.done;stroke=S.done}else if(i<accept){fill=C.flight;stroke=S.flight}else{fill=C.queued;stroke=S.queued}svg.appendChild(el("rect",{x:x+.6,y:yOld,width:Math.max(1,cw-1.2),height:ch,fill:fill,stroke:stroke,"stroke-width":.9,rx:1.5}))}
+    for(i=0;i<E;i++){x=L+(before+i)*cw;var rel=i-offset;if(rel<0){fill=C.drop;stroke=S.drop}else if(rel<preserved){fill=C.keep;stroke=S.keep}else if(rel<preserved+transition){fill=C.mix;stroke=S.mix}else{fill=C.fresh;stroke=S.fresh}svg.appendChild(el("rect",{x:x+.6,y:yNew,width:Math.max(1,cw-1.2),height:ch,fill:fill,stroke:stroke,"stroke-width":.9,rx:1.5}))}
+    function bracket(from,count,color,label,y){if(count<=0)return;var x0=L+(before+from)*cw+.6,x1=L+(before+from+count)*cw-.6;svg.appendChild(el("path",{d:"M"+x0+" "+(y+4)+"L"+x0+" "+y+"L"+x1+" "+y+"L"+x1+" "+(y+4),fill:"none",stroke:color,"stroke-width":1}));svg.appendChild(el("text",{x:(x0+x1)/2,y:y+15,"font-size":9,"font-weight":600,"text-anchor":"middle",fill:color},label))}
+    bracket(0,offset,S.drop,"丢弃 "+offset,yNew+ch+6);bracket(offset,preserved,S.keep,"保留 "+preserved,yNew+ch+6);bracket(offset+preserved,transition,S.mix,"融合 "+transition,yNew+ch+6);bracket(offset+preserved+transition,E-offset-preserved-transition,S.fresh,"仅新计划",yNew+ch+6);
+    function marker(col,label,sub,color,left){var mx=L+col*cw,anchor=left&&mx>230?"end":"start",dx=anchor==="end"?-7:7;svg.appendChild(el("line",{x1:mx,y1:yOld-27,x2:mx,y2:yNew+ch+3,stroke:color,"stroke-width":1,"stroke-dasharray":"3 3"}));svg.appendChild(el("circle",{cx:mx,cy:yOld-27,r:3,fill:color}));svg.appendChild(el("text",{x:mx+dx,y:yOld-31,"font-size":10,"font-weight":700,fill:color,"text-anchor":anchor},label));svg.appendChild(el("text",{x:mx+dx,y:yOld-19,"font-size":9,fill:"#9ca2aa","text-anchor":anchor},sub))}
+    marker(before,"发出请求",trigger+" 行仍在队列",S.flight,true);marker(accept,"接收回复",offset+" 行已经过期",S.fresh,false);
+    var axis=yNew+ch+43;svg.appendChild(el("line",{x1:L,y1:axis,x2:R,y2:axis,stroke:"#cfcec8"}));for(i=0;i<=total;i+=Math.max(2,Math.round(total/9))){x=L+i*cw;svg.appendChild(el("line",{x1:x,y1:axis,x2:x,y2:axis+4,stroke:"#cfcec8"}));svg.appendChild(el("text",{x:x,y:axis+16,"font-size":9,fill:"#9ca2aa","text-anchor":"middle"},"t+"+i))}svg.appendChild(el("text",{x:L,y:axis+33,"font-size":9,fill:"#9ca2aa"},"每格 = 一个控制步 = "+stepMs.toFixed(1)+" ms"));
+    var firstNew=before+offset+preserved+transition;
+    readout.innerHTML=cell(latSteps,"延迟步数","ceil("+lat+" / "+stepMs.toFixed(1)+" ms)")+cell(trigger,"请求深度",blend?"延迟 + 余量 + preserve + transition":"延迟 + 余量")+cell(offset,"对齐偏移","从新回复前端丢弃的行数")+cell("t+"+firstNew,"第一行纯新动作",preserved+" 行保留，"+transition+" 行融合")+cell((E*stepMs/1000).toFixed(2)+" s","执行窗口",E+" 行，"+f+" Hz")+(trigger>=E-1?cell("!","预留已饱和","时序预留占满执行前缀"):"");
   }
-  function start(){clearInterval(timer);phase=0;draw();if(!window.matchMedia("(prefers-reduced-motion: reduce)").matches)timer=setInterval(function(){phase=(phase+1)%3;draw()},1700);else{phase=2;draw()}}
-  if(replay)replay.addEventListener("click",start);start();
+  ids.forEach(function(id){document.getElementById(id).addEventListener("input",drawRtc)});mode.addEventListener("change",drawRtc);drawRtc();
 })();
 </script>
 </body>

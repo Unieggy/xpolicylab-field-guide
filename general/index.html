@@ -55,8 +55,22 @@ figcaption b{display:block;margin-bottom:3px}
 .canvas{width:100%;overflow-x:auto;overscroll-behavior-inline:contain}
 .canvas svg{display:block;width:100%;min-width:760px;height:auto}
 svg text{font-family:var(--sans)}
-.rtc-status{display:flex;justify-content:space-between;gap:18px;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}
-.rtc-status b{font-family:var(--mono)}
+.controls{display:flex;flex-wrap:wrap;gap:14px 24px;margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid var(--line);font-size:11px}
+.controls label{display:grid;gap:6px;color:var(--muted)}
+.controls .cap{display:flex;justify-content:space-between;gap:12px;font-weight:650;letter-spacing:.045em;text-transform:uppercase}
+.controls .cap b{color:var(--ink);font:650 11.5px var(--mono);letter-spacing:0}
+.controls input[type=range]{width:126px;accent-color:var(--blue)}
+.controls select{padding:3px 6px;border:1px solid var(--line2);border-radius:4px;background:#fff;color:var(--ink);font:11.5px var(--sans)}
+.legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(245px,1fr));gap:7px 24px;margin-top:18px;padding-top:15px;border-top:1px solid var(--line);font-size:11.7px;line-height:1.45}
+.legend span{display:block;padding-left:19px;text-indent:-19px;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;margin-right:9px;border:1px solid rgba(0,0,0,.2);border-radius:2px;transform:translateY(1px);text-indent:0}
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px 22px;margin-top:19px;padding-top:15px;border-top:1px solid var(--line)}
+.readout>div{color:var(--muted);font-size:10.9px;line-height:1.4}
+.readout b{display:block;margin-bottom:3px;color:var(--ink);font:650 1.15rem/1.1 var(--mono)}
+.formula{margin:28px 0;padding:19px 21px;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2);font-family:var(--mono)}
+.formula>b{display:block;margin-bottom:10px;font-size:1.05rem}
+.formula span{display:block;color:var(--muted);font:12px/1.65 var(--sans)}
+.pipeline-order{margin:27px 0;color:var(--muted);font:650 12px/1.65 var(--mono)}
 button{padding:7px 10px;border:1px solid var(--line2);border-radius:5px;background:#fff;color:var(--ink);font:650 11px var(--sans);cursor:pointer}
 button:hover{border-color:var(--blue);color:var(--blue)}
 .table{margin:28px 0;overflow-x:auto}
@@ -107,7 +121,7 @@ td:first-child{color:var(--ink);font-weight:620}
     <a href="#architecture">Runtime boundaries</a>
     <a href="#rtc">Async inference</a>
     <a href="#motion">Motion conditioning</a>
-    <a href="#initial">Initial state</a>
+    <a href="#initial">Dataset-guided starts</a>
     <a href="#dagger">DAgger data</a>
     <a href="#onboarding">Model onboarding</a>
     <a href="#debugging">Fault isolation</a>
@@ -206,17 +220,36 @@ td:first-child{color:var(--ink);font-weight:620}
   <div class="col">
     <h2>Async inference is a timing problem before it is a blending problem</h2>
     <p>With synchronous execution, the robot may empty the current action chunk and stop while the next one is being generated. Asynchronous inference avoids that pause by requesting the next chunk early and letting control continue from the existing queue.</p>
-    <p>The reply is based on an older observation. If inference took several control steps, the first several predicted actions now refer to time that has already passed. Measure the end-to-end delay in control steps, remove the elapsed prefix, and keep only actions that still belong to the future. A short blend may soften the handoff, but it cannot repair incorrect time alignment.</p>
-    <p>Re-measure latency when the model, accelerator, image path, compiler, or network changes. The broader literature compares several blending and training-time alternatives; the runtime baseline here is intentionally narrower: prefetch, align, then optionally blend.</p>
+    <p>A policy may predict a horizon of <code>H</code> rows while the controller deliberately queues only an execution prefix <code>E ≤ H</code>. Trigger depth and queue accounting must use <code>E</code>, not the model's full horizon: an unused prediction tail is not latency budget unless it is actually eligible for execution.</p>
+    <p>The reply is based on an older observation. If inference took several control steps, its first rows now refer to time that has already passed. The runtime therefore records the execution counter at submission, measures how many rows were consumed while the request was in flight, adds any observation age, and removes that elapsed prefix from the reply.</p>
+    <div class="formula">
+      <b>alignment offset c = consumed while in flight + ceil(observation age × control rate)</b>
+      <span>Accept the reply only when <code>c &lt; T</code>, where <code>T</code> is the returned horizon. Install rows <code>c … T−1</code>; if every row is stale, discard the reply and request again immediately.</span>
+    </div>
+    <p>Request timing should also come from measurements. Convert a recent high-percentile end-to-end latency into control steps, add a small scheduling margin, and request while at least that many executable rows remain. Re-measure when the model, accelerator, image transport, compiler, or network changes.</p>
+    <p><b>Preserve and transition are not latency estimates.</b> Preserve deliberately keeps a few still-valid rows from the old plan after the reply arrives. Transition blends the following aligned rows. In no-blend mode the runtime still prefetches and drops stale rows; it simply switches directly to the new future plan.</p>
+    <div class="formula">
+      <b>uᵢ = (i + 1)/(K + 1), &nbsp; wᵢ = 3uᵢ² − 2uᵢ³, &nbsp; aᵢ = (1 − wᵢ)aᵢ<sup>old</sup> + wᵢaᵢ<sup>new</sup></b>
+      <span>One common <code>K</code>-row transition uses this smoothstep curve after alignment. The preceding <code>P</code> preserve rows remain exactly old; then the weight moves monotonically from old toward new. The curve is a policy choice, not a substitute for measuring latency.</span>
+    </div>
   </div>
-  <figure class="diagram wide">
-    <figcaption><b>A three-step asynchronous handoff</b>The animation leaves out model-specific queue lengths and blend curves. Those are tuning choices after time alignment is correct.</figcaption>
-    <div class="canvas"><svg id="rtcSvg" viewBox="0 0 900 245" role="img" aria-label="Simplified real-time chunking animation"></svg></div>
-    <div class="rtc-status"><span id="rtcText">1 · Request the next chunk before the queue empties.</span><button id="rtcReplay" type="button">Replay</button></div>
+  <figure class="diagram wide" id="rtc-demo">
+    <figcaption><b>One asynchronous action-chunk handoff</b>Change the execution prefix, measured latency, and blend policy. Each cell is one control step; color shows which plan owns that time slot. The default numbers are illustrative, not deployment recommendations.</figcaption>
+    <div class="controls">
+      <label><span class="cap">Mode</span><select id="rtcMode"><option value="align">No blend</option><option value="blend" selected>Blend</option></select></label>
+      <label><span class="cap">Execution prefix E <b id="vH">16</b></span><input id="rH" type="range" min="8" max="32" step="4" value="16"></label>
+      <label><span class="cap">Control rate Hz <b id="vF">30</b></span><input id="rF" type="range" min="10" max="60" step="5" value="30"></label>
+      <label><span class="cap">Measured latency ms <b id="vL">73</b></span><input id="rL" type="range" min="20" max="240" step="1" value="73"></label>
+      <label><span class="cap">Preserve <b id="vP">0</b></span><input id="rP" type="range" min="0" max="8" value="0"></label>
+      <label><span class="cap">Transition <b id="vT">4</b></span><input id="rT" type="range" min="0" max="8" value="4"></label>
+    </div>
+    <div class="canvas"><svg id="rtcSvg" viewBox="0 0 900 270" role="img" aria-label="Interactive elapsed-time alignment and seam-blending diagram"></svg></div>
+    <div class="legend" id="rtcLegend"></div>
+    <div class="readout" id="rtcOut"></div>
   </figure>
   <div class="col note amber">
     <span class="label">Three separate jobs</span>
-    <p>Prefetching prevents a compute stall. Alignment removes predictions for elapsed time. Seam blending reduces a jump between two valid future trajectories. Treating them as one feature makes timing bugs hard to see.</p>
+    <p>Prefetching prevents a compute stall. Alignment removes predictions for elapsed time. Seam blending reduces a jump between two valid future trajectories. Blending before alignment averages commands that belong to different times and hides the actual bug.</p>
   </div>
 </section>
 
@@ -235,15 +268,29 @@ td:first-child{color:var(--ink);font-weight:620}
         </tbody>
       </table>
     </div>
-    <p>A causal low-pass filter should normally carry state across chunk boundaries and operate on the selected model stream before final dispatch. It should not silently alter expert takeover data unless filtering was also part of the collection contract.</p>
+    <h3>Low-pass filtering handles noise inside the chunk</h3>
+    <div class="formula">
+      <b>yₜ = yₜ₋₁ + α(xₜ − yₜ₋₁), &nbsp; 0 &lt; α ≤ 1</b>
+      <span><code>xₜ</code> is the current coordinated target; <code>yₜ</code> is the command sent onward. Smaller α removes more high-frequency variation but adds more phase lag.</span>
+    </div>
+    <p>The filter must carry state across ordinary chunk boundaries; resetting there recreates the seam it was meant to suppress. Reset it from fresh measured state after episode start, takeover, hold, or feedback loss. Apply it only to fields whose timing can tolerate lag—gripper events often should bypass it.</p>
+    <p>A fixed target is not permanently reduced: repeated updates converge toward it. The practical problem is that a finite action chunk keeps moving the target, so aggressive filtering may always trail the policy. Measure command-to-feedback lag instead of choosing α by appearance.</p>
+    <h3>Splines solve a different problem</h3>
+    <p>Use cubic, quintic, or minimum-jerk interpolation when a controller receives sparse waypoints with an explicit travel time—for example a preparation pose, homing move, or transition between dataset-sampled starts. A spline creates a dense position/velocity profile between known endpoints. It is usually the wrong tool for a rapidly replanned stream because each new chunk changes the endpoint before the previous curve finishes.</p>
+    <p>Rate and acceleration limits remain a final safety boundary, not a smoother. If they clip frequently, report the amount and fix the upstream action scale, cadence, or contract rather than quietly treating the clipped trajectory as normal.</p>
+    <p class="pipeline-order">elapsed-time alignment → optional seam blend → causal low-pass → rate/safety validation → sole hardware writer</p>
   </div>
 </section>
 
 <section id="initial">
   <div class="col">
-    <h2>The initial pose is a model input, not stage decoration</h2>
-    <p>The first observation already conditions the whole rollout. A pose that looks symmetric or convenient to a human may be far outside the starts seen during training. Sample initial states from successful episodes, cluster them if necessary, and choose representative states that the real robot can reach safely.</p>
-    <p>Record the selected state, its source episode, units, and tolerances. If the robot cannot safely reach it, fix the collection or transition procedure rather than inventing a new start pose by eye.</p>
+    <h2>Sample deployment conditions from the dataset</h2>
+    <p>The first observation already conditions the whole rollout. A pose that looks symmetric or convenient to a human may be outside the starts seen during training. The same applies to camera placement, image rate, task wording, gripper range, and action cadence: they are parts of the learned input distribution, not setup decoration.</p>
+    <h3>Select complete recorded states</h3>
+    <p>Build the start library from successful training episodes. Restrict candidates to the early, pre-motion part of each episode; reject terminal states and pauses that occur after task progress; then cluster complete state vectors and choose real medoids. Do not assemble a pose from per-joint means or medians: every coordinate may look typical while their combination appeared in no demonstration.</p>
+    <p>For every selected start, retain its source episode, frame timestamp, full state vector, units, camera snapshot, task label, and reachability checks. Transition to it with a separately bounded motion primitive. If the robot cannot safely reach a sampled state, fix the transition or collect better coverage rather than inventing an unseen pose.</p>
+    <h3>Use the data to set motion expectations</h3>
+    <p>Before adding filters or changing rate limits, compute per-joint distributions of step size, velocity, acceleration, and gripper motion from the training episodes. Compare the raw policy output and human corrections using the same statistics at the same control rate. A runtime that produces much smaller steps will look timid; one that produces much larger steps will spend the rollout against safety limits.</p>
     <div class="note blue"><span class="label">Coverage limitation</span><p>A representative sample can select from existing coverage; it cannot create start states the demonstrations never contained.</p></div>
   </div>
 </section>
@@ -253,8 +300,10 @@ td:first-child{color:var(--ink);font-weight:620}
     <h2>DAgger should correct the policy without changing the task</h2>
     <p>In intervention-based DAgger, the policy visits states produced by its own mistakes, a human takes over when needed, and those corrections become new training data. The point is to add useful labels where the deployed policy actually fails—not to create a second, incompatible control domain.</p>
     <p>Correction data is useful only when its timing and action meaning match the original training contract. A slower teleoperator, a different control rate, or smaller command increments can teach timid behavior even when every row is valid. Compare expert and training distributions for per-step change, velocity, gripper range, command cadence, and observation age before fine-tuning.</p>
+    <p>At takeover, align the expert device to the robot’s measured configuration and transfer relative motion from that reference. Sending the expert device’s unrelated absolute pose creates a jump; changing its gain or speed without checking the original dataset changes the label distribution.</p>
     <h3>Record lineage, then derive the training view</h3>
-    <p>Keep the raw episode immutable and label, at every step, the model proposal, expert proposal, selected source, executed action, control mode, and takeover event. Training can then select expert-only windows, include lead-in context, or build a mixed view without guessing what happened.</p>
+    <p>Keep the full raw episode immutable and label, at every control step, the model proposal, aligned expert proposal, selected source, safety-adjusted command, executed action, control mode, and takeover event. Training can then select expert-only windows, include the model-failure lead-in, or build a mixed view without guessing what happened.</p>
+    <p>Use a dispatch-assigned control-step identifier when possible. Nearest-timestamp joins can cross a takeover boundary or attach a validity heartbeat to the wrong action. Missing or conflicting lineage should be quarantined, not guessed into a valid label.</p>
   </div>
   <div class="chain wide" aria-label="DAgger action lineage">
     <div><b>Model proposal</b>What the policy wanted</div>
@@ -264,7 +313,7 @@ td:first-child{color:var(--ink);font-weight:620}
     <div><b>Executed action</b>What hardware received</div>
     <div><b>Training view</b>Reproducible projection</div>
   </div>
-  <div class="col note amber"><span class="label">Common recording failure</span><p>Raw RGB frames stored directly in columnar files can make a modest collection enormous. Store numeric state, action, labels, and frame indexes in Parquet; encode camera streams as video and preserve timestamp mapping.</p></div>
+  <div class="col note amber"><span class="label">Storage is part of the contract</span><p>Raw RGB arrays stored directly in columnar files can make a modest collection enormous. Store numeric state, action, labels, and frame indexes in Parquet; encode camera streams as H.264/HEVC video and preserve the frame → timestamp → control-step mapping.</p></div>
 </section>
 
 <section id="onboarding">
@@ -338,21 +387,35 @@ qualification:
   document.addEventListener("keydown",function(e){if(e.key==="Escape")setNav(false)});
   if("IntersectionObserver" in window){var io=new IntersectionObserver(function(es){var v=es.filter(function(e){return e.isIntersecting}).sort(function(a,b){return b.intersectionRatio-a.intersectionRatio});if(!v.length)return;links.forEach(function(a){a.classList.toggle("active",a.getAttribute("href")==="#"+v[0].target.id)})},{rootMargin:"-18% 0px -65% 0px",threshold:[0,.1,.35]});document.querySelectorAll("main section[id]").forEach(function(n){io.observe(n)})}
 
-  var svg=document.getElementById("rtcSvg"),status=document.getElementById("rtcText"),replay=document.getElementById("rtcReplay"),phase=0,timer;
-  var copy=["1 · Request the next chunk before the queue empties.","2 · Control continues while inference is in flight.","3 · Drop elapsed rows; install only future actions."];
-  function rect(x,y,w,h,fill,stroke){return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="3" fill="'+fill+'" stroke="'+stroke+'"/>'}
-  function draw(){
-    if(!svg)return;var out='<text x="24" y="30" fill="#292a2d" font-size="14" font-weight="650">Current execution queue</text>';
-    for(var i=0;i<12;i++){var fill=i<4?"#ecece8":"#fff",stroke="#cac9c3";if(phase===1&&i>=4&&i<7){fill="#cfe0f7";stroke="#2764c5"}if(phase===2&&i>=7){fill="#d2eadf";stroke="#14745f"}out+=rect(24+i*67,48,54,38,fill,stroke)+'<text x="'+(51+i*67)+'" y="72" text-anchor="middle" fill="#666b72" font-size="10">'+i+'</text>'}
-    out+='<text x="24" y="128" fill="#292a2d" font-size="14" font-weight="650">New model reply</text>';
-    for(var j=0;j<10;j++){var f="#fff",s="#cac9c3";if(phase===2&&j<3){f="#f4d9d7";s="#ad413b"}else if(phase===2){f="#d2eadf";s="#14745f"}out+=rect(158+j*67,146,54,38,f,s)+'<text x="'+(185+j*67)+'" y="170" text-anchor="middle" fill="#666b72" font-size="10">'+j+'</text>'}
-    if(phase===0)out+='<path d="M420 94V135" stroke="#2764c5" stroke-width="2"/><text x="432" y="119" fill="#2764c5" font-size="11">request</text>';
-    if(phase===1)out+='<text x="308" y="111" fill="#2764c5" font-size="11">inference latency consumes control steps</text>';
-    if(phase===2)out+='<path d="M172 198H345" stroke="#ad413b" stroke-width="2"/><text x="258" y="219" text-anchor="middle" fill="#ad413b" font-size="11">elapsed rows discarded</text><path d="M374 198H814" stroke="#14745f" stroke-width="2"/><text x="594" y="219" text-anchor="middle" fill="#14745f" font-size="11">future rows accepted</text>';
-    svg.innerHTML=out;if(status)status.textContent=copy[phase];
+  var NS="http://www.w3.org/2000/svg",svg=document.getElementById("rtcSvg");
+  if(!svg)return;
+  function el(name,attrs,copy){var n=document.createElementNS(NS,name);Object.keys(attrs).forEach(function(k){n.setAttribute(k,attrs[k])});if(copy!=null)n.textContent=copy;return n}
+  var C={done:"#ecece8",flight:"#cfe0f7",queued:"#fff",drop:"#f4d9d7",keep:"#f5e2bb",mix:"#ddd4f6",fresh:"#d2eadf"};
+  var S={done:"#b4b7b0",flight:"#2764c5",queued:"#cac9c3",drop:"#ad413b",keep:"#9a640b",mix:"#694bb8",fresh:"#14745f"};
+  [[C.done,S.done,"old-plan rows executed before submission"],[C.flight,S.flight,"old-plan rows consumed while inference runs"],[C.queued,S.queued,"old-plan rows still queued at acceptance"],[C.drop,S.drop,"replacement rows discarded as stale"],[C.keep,S.keep,"valid old rows deliberately preserved"],[C.mix,S.mix,"aligned old/new rows blended"],[C.fresh,S.fresh,"new plan only"]].forEach(function(row){var n=document.createElement("span");n.innerHTML='<i style="background:'+row[0]+';border-color:'+row[1]+'"></i>'+row[2];document.getElementById("rtcLegend").appendChild(n)});
+  var ids=["rH","rF","rL","rP","rT"],caps=["vH","vF","vL","vP","vT"],mode=document.getElementById("rtcMode"),readout=document.getElementById("rtcOut");
+  function cell(value,label,sub){return "<div><b>"+value+"</b>"+label+"<br>"+sub+"</div>"}
+  function drawRtc(){
+    var E=+document.getElementById("rH").value,f=+document.getElementById("rF").value,lat=+document.getElementById("rL").value,P=+document.getElementById("rP").value,T=+document.getElementById("rT").value,blend=mode.value==="blend";
+    ids.forEach(function(id,i){document.getElementById(caps[i]).textContent=document.getElementById(id).value});
+    var stepMs=1000/f,latSteps=Math.max(0,Math.ceil(lat/stepMs)),trigger=Math.min(E-1,latSteps+1+(blend?P+T:0)),before=Math.max(0,E-trigger),offset=Math.min(latSteps,E-1),accept=before+offset;
+    var preserved=blend?Math.min(P,Math.max(0,E-accept),Math.max(0,E-offset-1)):0;
+    var transition=blend?Math.min(T,Math.max(0,E-accept-preserved),Math.max(0,E-offset-preserved-1)):0;
+    while(svg.firstChild)svg.removeChild(svg.firstChild);
+    var L=106,R=900,total=before+E,cw=(R-L)/total,ch=22,yOld=48,yNew=136;
+    [[yOld,"OLD PLAN","currently executing"],[yNew,"REPLACEMENT","shifted by elapsed time"]].forEach(function(row){svg.appendChild(el("text",{x:0,y:row[0]-8,"font-size":10.5,"font-weight":700,fill:"#292a2d"},row[1]));svg.appendChild(el("text",{x:0,y:row[0]+9,"font-size":9.5,fill:"#9ca2aa"},row[2]))});
+    var i,x,fill,stroke;
+    for(i=0;i<E;i++){x=L+i*cw;if(i<before){fill=C.done;stroke=S.done}else if(i<accept){fill=C.flight;stroke=S.flight}else{fill=C.queued;stroke=S.queued}svg.appendChild(el("rect",{x:x+.6,y:yOld,width:Math.max(1,cw-1.2),height:ch,fill:fill,stroke:stroke,"stroke-width":.9,rx:1.5}))}
+    for(i=0;i<E;i++){x=L+(before+i)*cw;var rel=i-offset;if(rel<0){fill=C.drop;stroke=S.drop}else if(rel<preserved){fill=C.keep;stroke=S.keep}else if(rel<preserved+transition){fill=C.mix;stroke=S.mix}else{fill=C.fresh;stroke=S.fresh}svg.appendChild(el("rect",{x:x+.6,y:yNew,width:Math.max(1,cw-1.2),height:ch,fill:fill,stroke:stroke,"stroke-width":.9,rx:1.5}))}
+    function bracket(from,count,color,label,y){if(count<=0)return;var x0=L+(before+from)*cw+.6,x1=L+(before+from+count)*cw-.6;svg.appendChild(el("path",{d:"M"+x0+" "+(y+4)+"L"+x0+" "+y+"L"+x1+" "+y+"L"+x1+" "+(y+4),fill:"none",stroke:color,"stroke-width":1}));svg.appendChild(el("text",{x:(x0+x1)/2,y:y+15,"font-size":9,"font-weight":600,"text-anchor":"middle",fill:color},label))}
+    bracket(0,offset,S.drop,"drop "+offset,yNew+ch+6);bracket(offset,preserved,S.keep,"keep "+preserved,yNew+ch+6);bracket(offset+preserved,transition,S.mix,"blend "+transition,yNew+ch+6);bracket(offset+preserved+transition,E-offset-preserved-transition,S.fresh,"new only",yNew+ch+6);
+    function marker(col,label,sub,color,left){var mx=L+col*cw,anchor=left&&mx>230?"end":"start",dx=anchor==="end"?-7:7;svg.appendChild(el("line",{x1:mx,y1:yOld-27,x2:mx,y2:yNew+ch+3,stroke:color,"stroke-width":1,"stroke-dasharray":"3 3"}));svg.appendChild(el("circle",{cx:mx,cy:yOld-27,r:3,fill:color}));svg.appendChild(el("text",{x:mx+dx,y:yOld-31,"font-size":10,"font-weight":700,fill:color,"text-anchor":anchor},label));svg.appendChild(el("text",{x:mx+dx,y:yOld-19,"font-size":9,fill:"#9ca2aa","text-anchor":anchor},sub))}
+    marker(before,"request sent",trigger+" rows remain",S.flight,true);marker(accept,"reply accepted",offset+" rows elapsed",S.fresh,false);
+    var axis=yNew+ch+43;svg.appendChild(el("line",{x1:L,y1:axis,x2:R,y2:axis,stroke:"#cfcec8"}));for(i=0;i<=total;i+=Math.max(2,Math.round(total/9))){x=L+i*cw;svg.appendChild(el("line",{x1:x,y1:axis,x2:x,y2:axis+4,stroke:"#cfcec8"}));svg.appendChild(el("text",{x:x,y:axis+16,"font-size":9,fill:"#9ca2aa","text-anchor":"middle"},"t+"+i))}svg.appendChild(el("text",{x:L,y:axis+33,"font-size":9,fill:"#9ca2aa"},"one cell = one control step = "+stepMs.toFixed(1)+" ms"));
+    var firstNew=before+offset+preserved+transition;
+    readout.innerHTML=cell(latSteps,"latency steps","ceil("+lat+" / "+stepMs.toFixed(1)+" ms)")+cell(trigger,"request depth",blend?"latency + margin + preserve + transition":"latency + margin")+cell(offset,"alignment offset","rows discarded from reply")+cell("t+"+firstNew,"first new-only row",preserved+" kept, "+transition+" blended")+cell((E*stepMs/1000).toFixed(2)+" s","execution window",E+" rows at "+f+" Hz")+(trigger>=E-1?cell("!","reserve saturated","timing reserve consumes the prefix"):"");
   }
-  function start(){clearInterval(timer);phase=0;draw();if(!window.matchMedia("(prefers-reduced-motion: reduce)").matches)timer=setInterval(function(){phase=(phase+1)%3;draw()},1700);else{phase=2;draw()}}
-  if(replay)replay.addEventListener("click",start);start();
+  ids.forEach(function(id){document.getElementById(id).addEventListener("input",drawRtc)});mode.addEventListener("change",drawRtc);drawRtc();
 })();
 </script>
 </body>

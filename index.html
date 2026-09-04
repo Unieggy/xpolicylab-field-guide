@@ -1120,7 +1120,7 @@ qualification:
 <section id="hardware">
   <div class="sec-num">09 · HARDWARE RUNBOOKS</div>
   <h2>GR3 and PiPER fail in different ways</h2>
-  <p class="sec-lede">GR3 and dual-PiPER fail at different physical boundaries. GR3 is a load-bearing humanoid: support and standing state come first. PiPER X is fixed-base, but a disabled arm can still fall under gravity: identity, CAN feedback and servo enable state come first.</p>
+  <p class="sec-lede">GR3 and dual-PiPER fail at different physical boundaries. GR3 is a load-bearing humanoid: lift support and verified whole-body <code>PdStand</code> come first. PiPER X is fixed-base, but a disabled arm can still fall under gravity: identity, CAN feedback and servo enable state come first.</p>
 
   <div class="hardware-index wide">
     <a href="#hardware-gr3">
@@ -1140,20 +1140,20 @@ qualification:
       <div class="robot-badge">GR3</div>
       <div>
         <h3>Support and balance are the safety boundary.</h3>
-        <p>A running policy process does not prove that GR3 is carrying its own weight. Keep the lift attached, prove the standing controller from readback, and only then hand the declared joints to policy control.</p>
+        <p>A running process does not prove that GR3 is safe to lower. Keep the lift attached, confirm whole-body <code>PdStand</code> from controller readback, and only then load the feet.</p>
       </div>
     </div>
 
     <div class="hardware-steps">
       <div class="hardware-step"><span class="num">01</span><b>Lift</b><span>Robot fully supported; fall area and cables clear.</span></div>
-      <div class="hardware-step"><span class="num">02</span><b>Stand</b><span>Standing mode confirmed from controller readback.</span></div>
+      <div class="hardware-step"><span class="num">02</span><b>PdStand</b><span>Whole-body PdStand confirmed from controller readback.</span></div>
       <div class="hardware-step"><span class="num">03</span><b>Lower</b><span>Both soles placed flat with small lift movements.</span></div>
-      <div class="hardware-step"><span class="num">04</span><b>Load check</b><span>Floor reaction and active recovery confirmed.</span></div>
+      <div class="hardware-step"><span class="num">04</span><b>Load check</b><span>Firm foot loading and a stable response confirmed.</span></div>
       <div class="hardware-step"><span class="num">05</span><b>Policy</b><span>One initialization and exact READY handoff.</span></div>
     </div>
 
     <figure>
-      <figcaption><b>Figure 6A · GR3 supported during PdStand bring-up</b><span>The lift stays attached while standing-controller state and load-bearing behavior are verified.</span></figcaption>
+      <figcaption><b>Figure 6A · GR3 supported during PdStand bring-up</b><span>The lift stays attached while exact PdStand readback and real foot loading are verified.</span></figcaption>
       <img class="field-photo" src="assets/gr3-pdstand-lift-supported.png" width="1080" height="1440" decoding="async" alt="Side view of a GR3 humanoid supported by an overhead lift while entering PdStand">
     </figure>
 
@@ -1161,27 +1161,27 @@ qualification:
       <h3>Five checks, then run</h3>
       <ol>
         <li><b>Lift first.</b> Support the full robot. Clear the feet, cables and fall area; keep the E-stop reachable.</li>
-        <li><b>Confirm standing mode.</b> Wait for the controller’s actual state readback — a running process alone proves nothing.</li>
+        <li><b>Confirm PdStand.</b> Wait for the exact whole-body <code>PdStand</code> readback — a running AuroraCore process alone proves nothing.</li>
         <li><b>Lower slowly.</b> Use small lift movements until both soles sit flat. Stop if either foot folds, slides or catches a cable.</li>
-        <li><b>Feel the load.</b> Gently guide the pelvis backward until the floor pushes back and you feel an upward reaction. With the lift still ready, use one small push at the pelvis to confirm the robot actively recovers.</li>
-        <li><b>Start the policy.</b> Initialize once, wait for the exact control states and READY message, then run. Do not keep pressing initialize through a fault.</li>
+        <li><b>Feel the load.</b> Gently guide the pelvis backward until the floor pushes back and you feel an upward reaction. With the lift still ready, use one small push to confirm that both feet stay planted without slipping or sudden strap loading.</li>
+        <li><b>Initialize, then run.</b> Press <code>i</code> once. Wait for <code>UserController_A + RemoteState + Navigation</code>, initial-pose completion and <code>CONTROLLER ready</code>; only then start model dispatch through the configured task/start control. Do not keep pressing initialize through a fault.</li>
       </ol>
     </div>
 
     <div class="note rule">
       <span class="label">GR3 controller state</span>
-      <p><code>AuroraCore → PdStand → i → UserController_A + RemoteState → CONTROLLER ready</code><br><b>UserController_A</b> runs lower-body RL balance/walking; <b>RemoteState</b> gives the declared upper-body joints to the model. AuroraClient only requests and reads these states.</p>
+      <p><code>AuroraCore → whole-body FSM 2: PdStand → lower and load both feet → i → whole-body FSM 3: UserController_A + upper-body FSM 2: RemoteState + velocity source: Navigation → initial pose → CONTROLLER ready</code><br><b>PdStand</b> is the supported lowering state. After <code>i</code>, <b>UserController_A</b> runs lower-body RL balance/walking while <b>RemoteState</b> accepts admitted upper-body commands; readiness also requires the <b>Navigation</b> velocity source. The two “FSM 2” values belong to different state machines; this production handoff is not whole-body FSM 11. AuroraClient requests and verifies states and sends admitted commands; AuroraCore remains the controller.</p>
     </div>
 
     <div class="table zebra">
       <table>
         <thead><tr><th style="width:32%">GR3 problem</th><th>Do this</th></tr></thead>
         <tbody>
-          <tr><td>Standing mode is not confirmed</td><td>Keep the robot fully lifted. Read the controller/FSM error; do not lower it.</td></tr>
+          <tr><td>PdStand is not confirmed</td><td>Keep the robot fully lifted. Read the whole-body controller/FSM error; do not lower it.</td></tr>
           <tr><td>Feet touch, but there is no upward reaction</td><td>The lift is still carrying the robot or a foot is not planted. Lower in small increments and check both soles again.</td></tr>
-          <tr><td>The robot does not recover from a small push</td><td>Do not run the policy. Restore lift support and inspect motor feedback and standing-controller state.</td></tr>
-          <tr><td>Initialization fails</td><td>Stay in the supported standing mode and fix the failed handoff stage. Do not bypass it or repeatedly retry.</td></tr>
-          <tr><td>You need to stop GR3</td><td><code>x</code> freezes policy output. <code>Ctrl-C</code> returns to PdStand and leaves AuroraCore alive. Never stop AuroraCore as normal cleanup.</td></tr>
+          <tr><td>A foot slips or the straps suddenly take load</td><td>Do not run the policy. Restore full lift support and inspect foot placement, motor feedback and the PdStand readback.</td></tr>
+          <tr><td>Initialization fails</td><td>Keep the lift bearing-ready and verify the exact whole-body state. Do not assume it recovered to PdStand; fix the failed handoff stage before retrying.</td></tr>
+          <tr><td>You need to stop GR3</td><td><code>x</code> blocks model dispatch and actively holds the measured upper-body pose. <code>Ctrl-C</code> requests and waits for PdStand confirmation while leaving AuroraCore alive. Never stop AuroraCore as normal cleanup.</td></tr>
         </tbody>
       </table>
     </div>

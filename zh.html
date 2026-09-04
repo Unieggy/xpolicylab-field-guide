@@ -1131,7 +1131,7 @@ qualification:
 <section id="hardware">
   <div class="sec-num">09 · 硬件排障手册</div>
   <h2>GR3 和 PiPER 的故障方式完全不同</h2>
-  <p class="sec-lede">GR3 和双臂 PiPER 会在不同的物理边界上出问题。GR3 是承重人形机器人，支撑和站立状态永远排在第一位；PiPER X 是固定底座，但失能的机械臂仍会在重力下坠落，所以设备身份、CAN 反馈和伺服使能状态排在第一位。</p>
+  <p class="sec-lede">GR3 和双臂 PiPER 会在不同的物理边界上出问题。GR3 是承重人形机器人，首先要保持吊装支撑，并从控制器回读确认全身 <code>PdStand</code>；PiPER X 是固定底座，但失能的机械臂仍会在重力下坠落，所以设备身份、CAN 反馈和伺服使能状态排在第一位。</p>
 
   <div class="hardware-index wide">
     <a href="#hardware-gr3">
@@ -1151,20 +1151,20 @@ qualification:
       <div class="robot-badge">GR3</div>
       <div>
         <h3>支撑和平衡就是安全边界。</h3>
-        <p>policy 进程在跑，不代表 GR3 已经在承受自身重量。吊装保持连接，先从状态回读确认站立控制器，再把声明过的关节交给 policy 控制。</p>
+        <p>进程正在运行，并不能证明 GR3 已经可以安全下放。吊装必须保持连接；先从控制器回读确认全身 <code>PdStand</code>，再让双脚承重。</p>
       </div>
     </div>
 
     <div class="hardware-steps">
       <div class="hardware-step"><span class="num">01</span><b>吊起</b><span>完整支撑机器人，清空跌倒区域并整理线缆。</span></div>
-      <div class="hardware-step"><span class="num">02</span><b>站立</b><span>从控制器回读确认 standing mode。</span></div>
+      <div class="hardware-step"><span class="num">02</span><b>PdStand</b><span>从控制器回读确认全身 PdStand。</span></div>
       <div class="hardware-step"><span class="num">03</span><b>下放</b><span>小幅移动吊装，直到两只脚掌平放。</span></div>
-      <div class="hardware-step"><span class="num">04</span><b>承重检查</b><span>确认地面反作用力和主动恢复能力。</span></div>
+      <div class="hardware-step"><span class="num">04</span><b>承重检查</b><span>确认双脚稳定承重，机器人响应稳定。</span></div>
       <div class="hardware-step"><span class="num">05</span><b>启动 policy</b><span>只初始化一次，等待准确的 READY 交接。</span></div>
     </div>
 
     <figure>
-      <figcaption><b>图 6A · GR3 在 PdStand 启动阶段保持吊装支撑</b><span>站立控制器状态和承重行为都验证通过之前，吊装不能拆。</span></figcaption>
+      <figcaption><b>图 6A · GR3 在 PdStand 启动阶段保持吊装支撑</b><span>只有确认准确的 PdStand 回读和真实脚底承重之后，才能进入下一步。</span></figcaption>
       <img class="field-photo" src="assets/gr3-pdstand-lift-supported.png" width="1080" height="1440" decoding="async" alt="GR3 人形机器人在进入 PdStand 时由上方吊装系统提供支撑">
     </figure>
 
@@ -1172,27 +1172,27 @@ qualification:
       <h3>五项检查做完，再运行</h3>
       <ol>
         <li><b>先吊起。</b>完整支撑机器人。清空脚边、线缆和跌倒区域，急停必须触手可及。</li>
-        <li><b>确认 standing mode。</b>等控制器真实状态回读。进程在跑，本身证明不了任何东西。</li>
+        <li><b>确认 PdStand。</b>等待控制器准确回读全身 <code>PdStand</code>。仅仅看到 AuroraCore 进程在运行，并不能证明状态正确。</li>
         <li><b>缓慢下放。</b>用很小的吊装位移让两只脚掌平放。任何一只脚折叠、打滑或勾到线缆，立刻停。</li>
-        <li><b>感受承重。</b>轻推骨盆向后，直到地面开始往回顶，手上能感到向上的反作用力。吊装仍保持随时承重，再对骨盆做一次小扰动，确认机器人会主动恢复。</li>
-        <li><b>启动 policy。</b>只初始化一次，等准确的控制状态和 READY 消息，再运行。出了 fault 不要反复按初始化。</li>
+        <li><b>感受承重。</b>轻推骨盆向后，直到能感受到地面对机器人的向上反作用力。吊装仍保持随时承重，再轻推一次，确认双脚没有滑动，吊带也没有突然受力。</li>
+        <li><b>先初始化，再运行。</b>只按一次 <code>i</code>。等待 <code>UserController_A + RemoteState + Navigation</code>、初始姿态完成和 <code>CONTROLLER ready</code>，再通过当前配置的任务/启动控制让模型开始下发。发生 fault 时不要连续点击初始化。</li>
       </ol>
     </div>
 
     <div class="note rule">
       <span class="label">GR3 控制器状态链</span>
-      <p><code>AuroraCore → PdStand → i → UserController_A + RemoteState → CONTROLLER ready</code><br><b>UserController_A</b> 跑下半身 RL 平衡与行走；<b>RemoteState</b> 把声明过的上半身关节交给模型。AuroraClient 只请求和读取这些状态。</p>
+      <p><code>AuroraCore → 全身 FSM 2: PdStand → 下放并让双脚承重 → i → 全身 FSM 3: UserController_A + 上半身 FSM 2: RemoteState + 速度源 Navigation → 初始姿态 → CONTROLLER ready</code><br><b>PdStand</b> 是有吊装保护时的下放状态。按下 <code>i</code> 后，<b>UserController_A</b> 负责下半身 RL 平衡与行走，<b>RemoteState</b> 接收通过准入的上半身指令；readiness 还要求速度源为 <b>Navigation</b>。这里两个“FSM 2”属于不同的状态机；当前生产交接不是全身 FSM 11。AuroraClient 会请求并校验状态，也会发送通过准入的指令；真正的控制器仍是 AuroraCore。</p>
     </div>
 
     <div class="table zebra">
       <table>
         <thead><tr><th style="width:32%">GR3 问题</th><th>处理方式</th></tr></thead>
         <tbody>
-          <tr><td>standing mode 没有确认</td><td>保持机器人完全吊起。读 controller/FSM 错误，不要继续下放。</td></tr>
+          <tr><td>没有确认 PdStand</td><td>保持机器人完全吊起，读取全身 controller/FSM 错误，不要继续下放。</td></tr>
           <tr><td>脚已触地，但感受不到向上反作用力</td><td>吊装还在承担重量，或者有一只脚没踩实。小幅继续下放，再检查两只脚掌。</td></tr>
-          <tr><td>小扰动后机器人不会主动恢复</td><td>不要运行 policy。恢复吊装支撑，检查电机反馈和 standing-controller 状态。</td></tr>
-          <tr><td>初始化失败</td><td>留在有吊装保护的 standing mode，修好交接链里真正失败的阶段。不要绕过，也不要连续重试。</td></tr>
-          <tr><td>需要停止 GR3</td><td><code>x</code> 冻结 policy 输出；<code>Ctrl-C</code> 返回 PdStand，AuroraCore 保持运行。永远不要把停掉 AuroraCore 当作正常清理步骤。</td></tr>
+          <tr><td>脚底滑动，或吊带突然受力</td><td>不要运行 policy。恢复完整吊装支撑，检查脚底位置、电机反馈和 PdStand 状态回读。</td></tr>
+          <tr><td>初始化失败</td><td>让吊装保持随时承重，并核对准确的全身状态。不要假设机器人已经恢复到 PdStand；修复失败的交接阶段后再重试。</td></tr>
+          <tr><td>需要停止 GR3</td><td><code>x</code> 会阻止模型继续下发，并主动保持实测上半身姿态；<code>Ctrl-C</code> 会请求并等待 PdStand 确认，同时保持 AuroraCore 运行。不要把停止 AuroraCore 当作正常清理流程。</td></tr>
         </tbody>
       </table>
     </div>
